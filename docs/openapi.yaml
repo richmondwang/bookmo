@@ -1,0 +1,367 @@
+openapi: 3.1.0
+info:
+  title: BookMo Booking Platform API
+  version: 1.0.0
+  description: |
+    Two-sided booking marketplace for the Philippines market.
+    Customers discover and book services. Owners manage listings and approve bookings.
+
+servers:
+  - url: http://localhost:8080/v1
+    description: Local development
+  - url: https://api.yourdomain.com/v1
+    description: Production
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:   { type: string }
+        message: { type: string }
+
+    Booking:
+      type: object
+      properties:
+        id:           { type: string, format: uuid }
+        service_id:   { type: string, format: uuid }
+        branch_id:    { type: string, format: uuid }
+        customer_id:  { type: string, format: uuid }
+        start_time:   { type: string, format: date-time }
+        end_time:     { type: string, format: date-time }
+        quantity:     { type: integer }
+        status:
+          type: string
+          enum: [pending, awaiting_approval, confirmed, rejected, cancelled, rescheduled, completed]
+        currency:     { type: string, example: PHP }
+        created_at:   { type: string, format: date-time }
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      security: []
+      responses:
+        '200':
+          description: OK
+
+  # Auth
+  /auth/register:
+    post:
+      summary: Register a new user
+      security: []
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, role]
+              properties:
+                email:    { type: string, format: email }
+                password: { type: string, minLength: 8 }
+                phone:    { type: string }
+                role:     { type: string, enum: [customer, owner] }
+      responses:
+        '201': { description: Created }
+        '400': { description: Validation error }
+        '409': { description: Email already registered }
+
+  /auth/login:
+    post:
+      summary: Login
+      security: []
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:    { type: string }
+                password: { type: string }
+      responses:
+        '200':
+          description: JWT token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+        '401': { description: Invalid credentials }
+
+  # Search
+  /search:
+    get:
+      summary: Search services by location and keyword
+      security: []
+      tags: [Search]
+      parameters:
+        - name: lat
+          in: query
+          required: true
+          schema: { type: number }
+        - name: lng
+          in: query
+          required: true
+          schema: { type: number }
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: category
+          in: query
+          schema: { type: string }
+        - name: radius
+          in: query
+          schema: { type: integer, default: 5000 }
+        - name: page
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        '200': { description: List of services }
+
+  # Availability
+  /availability:
+    get:
+      summary: Get available slots for a service on a date
+      tags: [Availability]
+      parameters:
+        - name: service_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: branch_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: date
+          in: query
+          required: true
+          schema: { type: string, format: date }
+      responses:
+        '200': { description: Available slots }
+
+  # Bookings
+  /bookings/lock:
+    post:
+      summary: Lock a slot before payment
+      tags: [Bookings]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [service_id, branch_id, start_time, end_time]
+              properties:
+                service_id:  { type: string, format: uuid }
+                branch_id:   { type: string, format: uuid }
+                start_time:  { type: string, format: date-time }
+                end_time:    { type: string, format: date-time }
+                quantity:    { type: integer, default: 1 }
+      responses:
+        '201': { description: Lock created }
+        '409': { description: Slot unavailable }
+
+  /bookings:
+    post:
+      summary: Create a booking (after payment intent confirmed)
+      tags: [Bookings]
+      responses:
+        '201':
+          description: Booking created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Booking' }
+    get:
+      summary: List my bookings
+      tags: [Bookings]
+      responses:
+        '200': { description: Booking list }
+
+  /bookings/{id}/cancel:
+    post:
+      summary: Cancel a booking
+      tags: [Bookings]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Cancelled }
+        '404': { description: Not found }
+
+  /bookings/{id}/reschedule:
+    post:
+      summary: Request a reschedule
+      tags: [Bookings]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_start_time, new_end_time]
+              properties:
+                new_start_time: { type: string, format: date-time }
+                new_end_time:   { type: string, format: date-time }
+      responses:
+        '201': { description: Reschedule request submitted }
+        '409': { description: Pending reschedule already exists }
+        '422': { description: Attempt limit reached }
+
+  # Owner — approval queue
+  /owner/queue:
+    get:
+      summary: Get pending bookings and reschedule requests
+      tags: [Owner]
+      responses:
+        '200': { description: Approval queue items }
+
+  /owner/bookings/{id}/approve:
+    post:
+      summary: Approve a booking
+      tags: [Owner]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Approved }
+        '409': { description: Slot no longer available }
+
+  /owner/bookings/{id}/reject:
+    post:
+      summary: Reject a booking
+      tags: [Owner]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+      responses:
+        '200': { description: Rejected }
+
+  /owner/reschedules/{id}/approve:
+    post:
+      summary: Approve a reschedule request
+      tags: [Owner]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Reschedule approved, new booking created }
+        '409': { description: New slot unavailable }
+
+  /owner/reschedules/{id}/reject:
+    post:
+      summary: Reject a reschedule request
+      tags: [Owner]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Rejected, original booking stays confirmed }
+
+  # Payments
+  /payments/intent:
+    post:
+      summary: Create a PayMongo payment intent
+      tags: [Payments]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [booking_id, method]
+              properties:
+                booking_id: { type: string, format: uuid }
+                method:     { type: string, enum: [card, gcash, maya] }
+      responses:
+        '201':
+          description: Payment intent created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  client_key:         { type: string }
+                  payment_intent_id:  { type: string }
+
+  /payments/webhook:
+    post:
+      summary: PayMongo webhook receiver
+      security: []
+      tags: [Payments]
+      responses:
+        '200': { description: Acknowledged }
+
+  # Reviews
+  /reviews:
+    post:
+      summary: Submit a review for a completed booking
+      tags: [Reviews]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [booking_id, rating]
+              properties:
+                booking_id:   { type: string, format: uuid }
+                rating:       { type: integer, minimum: 1, maximum: 5 }
+                body:         { type: string, maxLength: 1000 }
+                is_anonymous: { type: boolean, default: false }
+      responses:
+        '201': { description: Review submitted }
+        '409': { description: Review already exists for this booking }
+        '422': { description: Booking not completed or outside 14-day window }
+
+  /services/{id}/reviews:
+    get:
+      summary: Get reviews for a service
+      security: []
+      tags: [Reviews]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: page
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        '200': { description: Review list with responses }

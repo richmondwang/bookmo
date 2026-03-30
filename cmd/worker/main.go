@@ -1,9 +1,9 @@
 package main
 
 import (
+	"github.com/richmondwang/bookmo/internal/worker"
+	"github.com/richmondwang/bookmo/pkg/config"
 	"log"
-	"https://github.com/richmondwang/bookmo/internal/config"
-	"https://github.com/richmondwang/bookmo/internal/worker"
 )
 
 func main() {

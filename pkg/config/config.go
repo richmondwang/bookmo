@@ -22,14 +22,14 @@ type Config struct {
 	JWTSecret string
 
 	// PayMongo
-	PayMongoSecretKey      string
-	PayMongoWebhookSecret  string
+	PayMongoSecretKey     string
+	PayMongoWebhookSecret string
 
 	// Firebase / APNs
-	FCMServerKey  string
-	APNSKeyID     string
-	APNSTeamID    string
-	APNSBundleID  string
+	FCMServerKey string
+	APNSKeyID    string
+	APNSTeamID   string
+	APNSBundleID string
 
 	// Storage
 	S3Bucket string

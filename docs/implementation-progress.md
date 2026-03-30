@@ -11,7 +11,7 @@
 |---|---|---|
 | availability     | done    | Merged to main                             |
 | bookings         | done    | Merged to main                             |
-| payments         | pending | depends on bookings                        |
+| payments         | done    | Merged to main; ADR-001 card auth/capture vs GCash/Maya immediate capture                        |
 | notifications    | done    | Merged to main                             |
 | search           | pending | depends on services                        |
 | reviews          | pending | depends on bookings                        |

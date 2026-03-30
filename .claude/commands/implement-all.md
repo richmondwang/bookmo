@@ -1,6 +1,6 @@
 # Implement all modules
 
-Implement all backend modules for the BookMo booking platform, tracking progress in `docs/implementation-progress.md` so work can be resumed correctly across sessions.
+Implement all backend modules for the BookMo — a Booking Platform, tracking progress in `docs/implementation-progress.md` so work can be resumed correctly across sessions.
 
 ## Step 1 — Read context
 
@@ -19,6 +19,24 @@ Check `docs/implementation-progress.md`:
 ## Step 3 — Implementation order
 
 Implement modules in this exact order (dependency order — each module may import the ones above it):
+
+### 0. auth (SSO)
+Read `@docs/decisions/ADR-010-sso-authentication.md` first.
+
+Implement alongside the existing email/password auth:
+- `internal/auth/sso.go` — VerifyGoogleToken, VerifyFacebookToken, VerifyAppleToken
+- `internal/auth/repository.go` — GetIdentityByProvider, CreateIdentity, LinkIdentity, GetUserByEmail (already exists — extend)
+- `internal/auth/service.go` — AuthenticateSSO (full flow: verify → lookup → new/returning/collision), StorePendingLink, VerifyPendingLink, SendOTP, VerifyOTP, SetPassword
+- `internal/auth/handler.go` — POST /auth/sso, POST /auth/sso/verify-link, POST /auth/send-otp, POST /auth/verify-otp, PUT /auth/password
+- `internal/auth/errors.go` — ErrEmailCollision (carries PendingLinkToken), ErrInvalidOTP, ErrOTPExpired, ErrOTPMaxAttempts, ErrInvalidProviderToken
+
+Key rules:
+- Never log or store raw provider tokens after verification
+- OTP: bcrypt hash before Redis storage, max 3 attempts, delete key on max attempts
+- POST /auth/send-otp always returns 200 — never leak email existence
+- Apple: save apple_name.given_name + family_name on first sign-in only; absence on subsequent calls is expected
+- pending_link_token: crypto/rand 32 bytes hex-encoded, 15-min Redis TTL
+- email_verified = true for all SSO-created users
 
 ### 1. availability
 Read `@docs/decisions/ADR-005-availability-resolution-priority.md` first.
@@ -150,10 +168,11 @@ When all 9 modules are marked `done`:
 
 - Never skip the progress file update after a module — it is how sessions resume correctly
 - Never implement a module out of order — dependency order exists for a reason
-- If a compile error in module B is caused by module A, fix A first
 - Soft deletes everywhere: all queries filter `WHERE deleted_at IS NULL`
 - Money in centavos (int) always — never float
 - Errors wrapped with context: `fmt.Errorf("module.Function: %w", err)`
 - Push notifications enqueued, never sent synchronously
 - Never write to `rating_summaries` or `customer_trust_profiles` from application code
+- Never log or retain raw SSO provider tokens after extracting claims
+- POST /auth/send-otp must always return 200 — never reveal email existence
 - Expose resolved `allows_participants: bool` on GET /services/:id — compute from the three-level resolution, not the raw nullable

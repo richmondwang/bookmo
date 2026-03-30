@@ -3,7 +3,7 @@
 # Usage: bash scaffold.sh
 set -e
 
-echo "Creating BookMo booking platform project structure..."
+echo "Creating BookMo — a Booking Platform project structure..."
 
 # ── cmd ──────────────────────────────────────────────────────────────────────
 mkdir -p cmd/api cmd/worker
@@ -892,7 +892,7 @@ mkdir -p docs
 cat > docs/openapi.yaml << 'EOF'
 openapi: 3.1.0
 info:
-  title: BookMo Booking Platform API
+  title: BookMo — a Booking Platform API
   version: 1.0.0
   description: |
     Two-sided booking marketplace for the Philippines market.

@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: BookMo Booking Platform API
+  title: BookMo — a Booking Platform API
   version: 1.0.0
   description: |
     Two-sided booking marketplace for the Philippines market.

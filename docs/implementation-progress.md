@@ -9,6 +9,7 @@
 
 | Module           | Status | Notes                                                          |
 |---|---|---|
+| auth_sso         | pending | extends existing auth module |
 | availability     | done   | Merged to main                                                 |
 | bookings         | done   | Merged to main                                                 |
 | payments         | done   | Merged to main                                                 |

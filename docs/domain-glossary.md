@@ -1,3 +1,26 @@
+## Authentication
+
+**SSO (Single Sign-On)**
+Authentication via a third-party provider (Google, Facebook, Apple) instead of email + password. The mobile app obtains an identity token from the provider's SDK and sends it to `POST /auth/sso`. The backend verifies the token with the provider and issues the app's own JWT.
+
+**User identity**
+A row in `user_identities` linking a user account to a specific SSO provider. One user can have multiple identities (e.g. linked to both Google and Facebook). Each identity has a `provider` and `provider_id` (the unique ID the provider uses for that user).
+
+**Provider ID**
+The unique identifier a provider assigns to a user — Google's `sub`, Facebook's `id`, Apple's `sub`. Stored in `user_identities.provider_id`. Never changes for a given user + provider combination.
+
+**Pending link token**
+A short-lived Redis key (15-minute TTL) created when a new SSO provider's email matches an existing account. The token stores the `provider` and `provider_id` waiting to be linked after the user verifies ownership of the existing account. Never stored in the database.
+
+**Email collision**
+When a user signs in with a new SSO provider and the email from that provider already exists in `users`. Handled by returning HTTP 409 with a `pending_link_token`. Requires verification before linking — never merged silently.
+
+**OTP (One-Time Password)**
+A 6-digit code sent to a user's email to verify ownership. Used in the email collision merge flow. Hashed with bcrypt before storing in Redis. Max 3 attempts; TTL 10 minutes.
+
+**email_verified**
+A boolean on `users`. SSO users are `true` on creation (provider verified it). Email/password users are `false` until they complete OTP verification.
+
 # Domain glossary
 
 Precise definitions for all domain terms used in this codebase. When in doubt about naming a variable, function, or column — use these terms exactly.

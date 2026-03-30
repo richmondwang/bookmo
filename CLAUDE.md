@@ -1,4 +1,4 @@
-# BookMo Booking Platform — Claude Code Context
+# BookMo — a Booking Platform — Claude Code Context
 
 ## Project overview
 
@@ -18,8 +18,9 @@ Before implementing any module, read the relevant files below. Use `@filename` i
 - **@docs/decisions/ADR-007-dual-review-system-and-profiles.md** — owner reviews of customers, trust profiles, profile photos, role-aware visibility
 - **@docs/decisions/ADR-008-booking-participants.md** — participant tagging, accept/decline flow, "booked with" history
 - **@docs/decisions/ADR-009-participant-eligibility.md** — category default + service override, resolution priority, eligibility query
+- **@docs/decisions/ADR-010-sso-authentication.md** — Google, Facebook, Apple SSO, email collision merge-with-verification, Apple name gotcha
 
-Read the relevant ADR before implementing: payments → ADR-001, bookings/reschedule → ADR-002, reviews → ADR-003, search → ADR-004, availability → ADR-005, notifications → ADR-006, profiles/customer-reviews → ADR-007, participants → ADR-008 + ADR-009.
+Read the relevant ADR before implementing: payments → ADR-001, bookings/reschedule → ADR-002, reviews → ADR-003, search → ADR-004, availability → ADR-005, notifications → ADR-006, profiles/customer-reviews → ADR-007, participants → ADR-008 + ADR-009, auth/SSO → ADR-010.
 
 ---
 
@@ -158,6 +159,19 @@ Side exits: `rejected` (from awaiting_approval), `cancelled` (from confirmed), `
 - **Disputes do not hide reviews** — a disputed review stays published until an admin explicitly removes it by setting `customer_reviews.status = 'removed'`.
 - **Approval queue must include trust data** — `GET /owner/queue` JOINs `customer_trust_profiles` and includes a `customer_trust` object on each item.
 - **Completion rate denominator** counts only bookings that reached `confirmed`, `completed`, or `cancelled` — not `pending` or `awaiting_approval`.
+
+
+## SSO authentication
+
+- **Three providers**: Google (all platforms), Facebook (all platforms), Apple (iOS only). All use `POST /auth/sso { provider, token }` — the backend verifies the provider token, never redirects through web OAuth flows.
+- **Email collision requires verification** — if a new provider's email matches an existing account, return HTTP 409 with a `pending_link_token` (stored in Redis, 15-min TTL). Never silently merge. The user must re-authenticate via an existing provider or verify via OTP before the new identity is linked.
+- **Apple name on first sign-in only** — Apple sends `givenName`/`familyName` only on the very first authorization. The mobile app includes `apple_name` in the request body. Store it immediately as `users.full_name`. On subsequent sign-ins the field is absent — this is expected and correct.
+- **OTP brute-force protection** — max 3 attempts per OTP. After 3 failures delete the Redis key; user must request a new code. Hash OTPs with bcrypt before storing in Redis — never plaintext.
+- **`POST /auth/send-otp` always returns 200** — never reveal whether the email exists through this endpoint.
+- **SSO users have `email_verified = true`** on creation — the provider already verified it. Email/password users default to `false`.
+- **Never log or retain raw provider tokens** after verification — discard immediately after extracting claims.
+- **Apple public keys are cached in Redis** with their expiry TTL — never fetch from Apple on every request.
+- **`pending_link_token` must be cryptographically random** — use `crypto/rand`, 32 bytes, hex-encoded. Never sequential.
 
 ## Booking participants
 

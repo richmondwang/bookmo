@@ -19,8 +19,9 @@ Before implementing any module, read the relevant files below. Use `@filename` i
 - **@docs/decisions/ADR-008-booking-participants.md** — participant tagging, accept/decline flow, "booked with" history
 - **@docs/decisions/ADR-009-participant-eligibility.md** — category default + service override, resolution priority, eligibility query
 - **@docs/decisions/ADR-010-sso-authentication.md** — Google, Facebook, Apple SSO, email collision merge-with-verification, Apple name gotcha
+- **@docs/decisions/ADR-011-go-swagger-annotations.md** — go-swagger annotation conventions, tag list, operationID naming, regeneration command
 
-Read the relevant ADR before implementing: payments → ADR-001, bookings/reschedule → ADR-002, reviews → ADR-003, search → ADR-004, availability → ADR-005, notifications → ADR-006, profiles/customer-reviews → ADR-007, participants → ADR-008 + ADR-009, auth/SSO → ADR-010.
+Read the relevant ADR before implementing: payments → ADR-001, bookings/reschedule → ADR-002, reviews → ADR-003, search → ADR-004, availability → ADR-005, notifications → ADR-006, profiles/customer-reviews → ADR-007, participants → ADR-008 + ADR-009, auth/SSO → ADR-010, swagger annotations → ADR-011.
 
 ---
 
@@ -189,6 +190,23 @@ Side exits: `rejected` (from awaiting_approval), `cancelled` (from confirmed), `
 - **UNIQUE constraint handles duplicates** — `(booking_id, user_id)` is unique. Catch the constraint violation and return `ErrAlreadyInvited`.
 - **Only accepted, non-left rows count for "booked with"** — always filter `status = 'accepted' AND left_at IS NULL AND b.status = 'completed'` in social history queries.
 - **Two notification types**: `participant_invited` (to invited user) and `participant_accepted` (to creator). Both are async via the notification queue per ADR-006.
+
+
+## go-swagger annotations (required on every handler and model — no exceptions)
+
+Annotations are not optional and not a separate step. Every handler function and every model struct must be fully annotated at the time it is written. A handler without a `swagger:route` comment is considered incomplete. A model struct used in a request or response without `swagger:model` is considered incomplete.
+
+- **Every handler function** must have a `swagger:route` comment immediately above it — method, path, tag, operationID, summary, description, security, parameters, responses
+- **Every model struct** used in a request or response must have `swagger:model` with field-level `required:`, `example:`, `enum:` comments
+- **operationIDs must be globally unique** across all modules — use camelCase, verb-first: `listBookings`, `approveBooking`, `getServiceReviews`
+- **Amount fields always note centavos** in the field comment: "Amount in centavos. Divide by 100 for display in PHP."
+- **Public endpoints omit `Security:`** — POST /auth/*, GET /search, GET /services/:id/reviews, POST /payments/webhook
+- **All owner endpoints** include both `Security: bearer:` and a description note that `role: owner` is required
+- **Regenerate after every handler change**: `swagger generate spec -o docs/openapi.yaml --scan-models && swagger validate docs/openapi.yaml`
+- **`docs/openapi.yaml` is generated, not hand-edited** — never edit the YAML directly
+- Use `/annotate-swagger <module>` to add annotations to a specific module
+
+Tags: `auth`, `search`, `services`, `availability`, `bookings`, `payments`, `reviews`, `profiles`, `participants`, `notifications`, `owner`
 
 ## Error handling conventions
 

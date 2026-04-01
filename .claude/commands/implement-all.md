@@ -23,6 +23,8 @@ Implement modules in this exact order (dependency order — each module may impo
 ### 0. auth (SSO)
 Read `@docs/decisions/ADR-010-sso-authentication.md` first.
 
+
+> **Swagger**: Annotate every handler with `swagger:route` and every request/response struct with `swagger:model` as you implement. Also add the `swagger:meta` block to `cmd/api/main.go` — this is the only module that does this.
 Implement alongside the existing email/password auth:
 - `internal/auth/sso.go` — VerifyGoogleToken, VerifyFacebookToken, VerifyAppleToken
 - `internal/auth/repository.go` — GetIdentityByProvider, CreateIdentity, LinkIdentity, GetUserByEmail (already exists — extend)
@@ -41,6 +43,8 @@ Key rules:
 ### 1. availability
 Read `@docs/decisions/ADR-005-availability-resolution-priority.md` first.
 
+
+> **Swagger**: Annotate every handler with `swagger:route` and every request/response struct with `swagger:model` as you implement.
 Implement:
 - `internal/availability/model.go` — Slot, AvailabilityRule, DateOverride structs
 - `internal/availability/repository.go` — GetDateOverride, GetAvailabilityRule, GetActiveBookingsInRange, GetActiveLocksInRange
@@ -51,6 +55,8 @@ Implement:
 ### 2. bookings
 Read `@docs/decisions/ADR-002-reschedule-keeps-original-confirmed.md` first.
 
+
+> **Swagger**: Annotate every handler with `swagger:route` and every request/response struct with `swagger:model` as you implement. The Booking model must document all 7 status enum values.
 Implement:
 - `internal/bookings/model.go` — Booking (all 7 states), BookingLock, RescheduleRequest structs + DTOs
 - `internal/bookings/repository.go` — Create, GetByID, UpdateStatus, CreateLock, DeleteLock, CreateRescheduleRequest, GetPendingRescheduleForBooking, ApproveReschedule (transaction), GetOwnerQueue
@@ -62,6 +68,8 @@ Implement:
 ### 3. payments
 Read `@docs/decisions/ADR-001-payment-method-split.md` first.
 
+
+> **Swagger**: Annotate every handler with `swagger:route` and every request/response struct with `swagger:model` as you implement. POST /payments/webhook has no Security: (public). All amount fields must note "in centavos".
 Implement:
 - `internal/payments/model.go` — PaymentIntent, Refund, WebhookEvent structs + PayMongoEvent DTO
 - `internal/payments/repository.go` — CreatePaymentIntent, UpdatePaymentIntentStatus, CreateRefund, UpdateRefundStatus, IsWebhookEventProcessed, MarkWebhookEventProcessed
@@ -73,6 +81,8 @@ Implement:
 ### 4. notifications
 Read `@docs/decisions/ADR-006-async-notifications.md` first.
 
+
+> **Swagger**: Annotate every handler with `swagger:route` and every request/response struct with `swagger:model` as you implement.
 Implement:
 - `internal/notifications/model.go` — Notification, DeviceToken, NotificationLog, NotificationJob structs
 - `internal/notifications/repository.go` — CreateNotification, GetUnread, MarkRead, GetActiveDeviceTokens, DeactivateToken, LogDeliveryAttempt, SaveDeviceToken
@@ -86,6 +96,8 @@ Implement:
 ### 5. search
 Read `@docs/decisions/ADR-004-geohash-feed-cache.md` first.
 
+
+> **Swagger**: Annotate every handler with `swagger:route` and every request/response struct with `swagger:model` as you implement. GET /search and GET /categories have no Security: (public).
 Implement:
 - `internal/search/model.go` — SearchParams, SearchResult structs
 - `internal/search/repository.go` — SearchServices (PostGIS + FTS combined query with rating join), GetCategories
@@ -97,6 +109,8 @@ Implement:
 ### 6. reviews
 Read `@docs/decisions/ADR-003-rating-summaries-trigger.md` first.
 
+
+> **Swagger**: Annotate every handler with `swagger:route` and every request/response struct with `swagger:model` as you implement. Document the 14-day window and the anonymous review rule (customer_id never returned when is_anonymous is true).
 Implement:
 - `internal/reviews/model.go` — Review, ReviewResponse, ReviewFlag, RatingSummary structs + DTOs. Anonymous reviews must never expose customer_id.
 - `internal/reviews/repository.go` — Create, GetByService, CreateResponse, UpdateResponse, CreateFlag, GetFlagCount
@@ -107,6 +121,8 @@ Implement:
 ### 7. profiles
 Read `@docs/decisions/ADR-007-dual-review-system-and-profiles.md` first.
 
+
+> **Swagger**: Annotate every handler with `swagger:route` and every request/response struct with `swagger:model` as you implement. Document the role-aware response difference in GET /users/:id/profile.
 Implement:
 - `internal/profiles/model.go` — UserProfile, CustomerTrustProfile, ProfilePhotoUploadURL structs + role-aware response DTOs (OwnerViewProfile vs CustomerViewProfile)
 - `internal/profiles/repository.go` — GetProfile, UpdateProfile, SetPhotoURL, GetTrustProfile
@@ -117,6 +133,8 @@ Implement:
 ### 8. customer_reviews
 Read `@docs/decisions/ADR-007-dual-review-system-and-profiles.md` first (same ADR).
 
+
+> **Swagger**: Annotate every handler with `swagger:route` and every request/response struct with `swagger:model` as you implement.
 Implement:
 - `internal/customer_reviews/model.go` — CustomerReview, CustomerReviewDispute structs + DTOs
 - `internal/customer_reviews/repository.go` — Create, GetByCustomer, GetByBooking, CreateDispute
@@ -127,6 +145,8 @@ Implement:
 ### 9. participants
 Read `@docs/decisions/ADR-008-booking-participants.md` and `@docs/decisions/ADR-009-participant-eligibility.md` first.
 
+
+> **Swagger**: Annotate every handler with `swagger:route` and every request/response struct with `swagger:model` as you implement. Document the 403 returned when service.allows_participants is false.
 Implement:
 - `internal/participants/model.go` — BookingParticipant struct, ParticipantStatus type, request/response DTOs
 - `internal/participants/repository.go` — Invite, GetByBooking, GetByUser, Accept, Decline, Leave, GetBookedWith
@@ -147,7 +167,8 @@ After completing each module:
 
 1. Run `go build ./...` — fix all compile errors before moving on
 2. Run `go test -race ./internal/<module>/...` — fix any failures
-3. **Update `docs/implementation-progress.md`** with:
+3. Run `swagger generate spec -o docs/openapi.yaml --scan-models && swagger validate docs/openapi.yaml` — fix any annotation errors before moving on
+4. **Update `docs/implementation-progress.md`** with:
    - Mark the module as `done` in the checklist table
    - Add a row to "Completed modules" with: module name, timestamp, any notable decisions or deviations from the ADR
    - Update "Last session notes" with what was just completed and what is next
@@ -157,15 +178,19 @@ The progress file update must happen after every module — not at the end of al
 
 ## Step 5 — Final step
 
-When all 9 modules are marked `done`:
+When all 9 modules are marked `done` and the swagger spec is valid (it should be, since you validated after each module):
 
 1. Run `go build ./...` — full project must compile cleanly
 2. Run `go test -race ./...` — all tests must pass
 3. Update `docs/implementation-progress.md` Status to `COMPLETE`
-4. Print a summary of all modules implemented and any decisions that deviated from the ADRs
+4. Do a final full swagger regeneration: `swagger generate spec -o docs/openapi.yaml --scan-models && swagger validate docs/openapi.yaml`
+5. Print a summary of all modules implemented and any decisions that deviated from the ADRs
 
 ## Rules that apply throughout
 
+- **Every handler must have `swagger:route` at time of writing** — not afterward, not as a separate step. A handler without this annotation is not done.
+- **Every model struct used in a request or response must have `swagger:model`** — add it when you write the struct, not later.
+- **After each module, run `swagger generate spec -o docs/openapi.yaml --scan-models && swagger validate docs/openapi.yaml`** — fix any annotation errors before moving to the next module.
 - Never skip the progress file update after a module — it is how sessions resume correctly
 - Never implement a module out of order — dependency order exists for a reason
 - Soft deletes everywhere: all queries filter `WHERE deleted_at IS NULL`

@@ -1,16 +1,50 @@
 openapi: 3.1.0
 info:
-  title: BookMo — a Booking Platform API
+  title: BookMo — Booking Platform API
   version: 1.0.0
   description: |
     Two-sided booking marketplace for the Philippines market.
     Customers discover and book services. Owners manage listings and approve bookings.
 
+    **Monetary amounts** are always in centavos (₱1 = 100 centavos).
+    **Timestamps** are RFC 3339 (UTC); display conversion to Asia/Manila happens client-side.
+    **Soft deletes** — deleted resources return 404; they are never hard-deleted.
+
 servers:
   - url: http://localhost:8080/v1
     description: Local development
-  - url: https://api.yourdomain.com/v1
+  - url: https://api.bookmo.ph/v1
     description: Production
+
+tags:
+  - name: Auth
+    description: Registration, login, SSO, OTP, email collision resolution
+  - name: Users
+    description: Current user profile and photo management
+  - name: Owners
+    description: Owner onboarding and branch management
+  - name: Services
+    description: Service CRUD and category taxonomy
+  - name: Availability
+    description: Slot generation, weekly rules, date overrides, branch calendar
+  - name: Bookings
+    description: Slot locking, booking lifecycle, reschedule requests
+  - name: OwnerQueue
+    description: Owner approval and rejection of bookings and reschedules
+  - name: Payments
+    description: PayMongo payment intents and webhook receiver
+  - name: Notifications
+    description: In-app notification feed and device token registration
+  - name: Search
+    description: Proximity browse and full-text keyword search
+  - name: Reviews
+    description: Customer reviews of services and owner responses
+  - name: Profiles
+    description: Role-aware user profiles and customer trust signals
+  - name: CustomerReviews
+    description: Owner reviews of customers and customer disputes
+  - name: Participants
+    description: Booking participant tagging and booked-with history
 
 components:
   securitySchemes:
@@ -20,130 +54,1333 @@ components:
       bearerFormat: JWT
 
   schemas:
+    # ── Shared / Primitive ────────────────────────────────────────────────────
+
     Error:
       type: object
+      required: [error, message]
       properties:
-        error:   { type: string }
-        message: { type: string }
+        error:
+          type: string
+          description: Machine-readable error slug
+          example: slot_unavailable
+        message:
+          type: string
+          description: Human-readable explanation
+          example: The selected time slot is no longer available
 
-    Booking:
+    # ── Auth ─────────────────────────────────────────────────────────────────
+
+    RegisterRequest:
+      type: object
+      required: [email, password, role]
+      properties:
+        email:     { type: string, format: email }
+        password:  { type: string, minLength: 8 }
+        full_name: { type: string }
+        phone:     { type: string }
+        role:      { type: string, enum: [customer, owner] }
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:    { type: string, format: email }
+        password: { type: string }
+
+    TokenResponse:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string, description: Signed JWT }
+
+    SSORequest:
+      type: object
+      required: [provider, token]
+      properties:
+        provider:
+          type: string
+          enum: [google, facebook, apple]
+        token:
+          type: string
+          description: Provider identity token from the native SDK
+        role:
+          type: string
+          enum: [customer, owner]
+          description: Required only on first sign-up to set the account role
+        apple_name:
+          type: object
+          description: |
+            Apple sends name only on the very first authorization.
+            Include this on first sign-in; omit on all subsequent sign-ins.
+          properties:
+            given_name:  { type: string }
+            family_name: { type: string }
+
+    EmailCollisionResponse:
+      type: object
+      required: [code, pending_link_token]
+      properties:
+        code:
+          type: string
+          enum: [email_exists]
+        pending_link_token:
+          type: string
+          description: |
+            Cryptographically random token (32 bytes hex). Redis TTL 15 min.
+            Pass to POST /auth/sso/verify-link to complete account linking.
+
+    VerifyLinkRequest:
+      type: object
+      required: [pending_link_token]
+      properties:
+        pending_link_token: { type: string }
+        otp:
+          type: string
+          description: 6-digit OTP (OTP path)
+        provider_token:
+          type: string
+          description: Identity token from an existing provider (re-auth path)
+
+    SendOTPRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email }
+
+    VerifyOTPRequest:
+      type: object
+      required: [email, otp]
+      properties:
+        email: { type: string, format: email }
+        otp:   { type: string, minLength: 6, maxLength: 6 }
+
+    AddPasswordRequest:
+      type: object
+      required: [password]
+      properties:
+        password: { type: string, minLength: 8 }
+
+    # ── Users / Profiles ──────────────────────────────────────────────────────
+
+    UpdateProfileRequest:
+      type: object
+      properties:
+        full_name: { type: string }
+        bio:       { type: string, maxLength: 300 }
+        phone:     { type: string }
+
+    PhotoUploadURLResponse:
+      type: object
+      required: [upload_url, cdn_url]
+      properties:
+        upload_url:
+          type: string
+          format: uri
+          description: Pre-signed S3 URL — upload the image bytes directly to this URL
+        cdn_url:
+          type: string
+          format: uri
+          description: Final CDN URL to pass to POST /users/me/photo/confirm
+
+    ConfirmPhotoRequest:
+      type: object
+      required: [cdn_url]
+      properties:
+        cdn_url:
+          type: string
+          format: uri
+          description: The cdn_url returned from POST /users/me/photo/upload-url
+
+    BasicProfileResponse:
+      type: object
+      required: [id, is_verified, joined_at]
+      properties:
+        id:                { type: string, format: uuid }
+        full_name:         { type: string, nullable: true }
+        profile_photo_url: { type: string, format: uri, nullable: true }
+        is_verified:       { type: boolean }
+        joined_at:         { type: string, format: date-time }
+
+    CustomerTrustProfile:
+      type: object
+      properties:
+        total_bookings:      { type: integer }
+        completed_bookings:  { type: integer }
+        cancelled_bookings:  { type: integer }
+        completion_rate:     { type: number, format: float, description: Percentage 0–100 }
+        cancellation_rate:   { type: number, format: float }
+        avg_owner_rating:    { type: number, format: float }
+        total_owner_reviews: { type: integer }
+        last_updated:        { type: string, format: date-time }
+
+    OwnerReviewOnProfile:
       type: object
       properties:
         id:           { type: string, format: uuid }
-        service_id:   { type: string, format: uuid }
-        branch_id:    { type: string, format: uuid }
-        customer_id:  { type: string, format: uuid }
-        start_time:   { type: string, format: date-time }
-        end_time:     { type: string, format: date-time }
-        quantity:     { type: integer }
+        owner_id:     { type: string, format: uuid }
+        rating:       { type: integer, minimum: 1, maximum: 5 }
+        body:         { type: string, nullable: true }
+        submitted_at: { type: string, format: date-time }
+
+    FullProfileResponse:
+      allOf:
+        - $ref: '#/components/schemas/BasicProfileResponse'
+        - type: object
+          properties:
+            bio:
+              type: string
+              nullable: true
+            trust:
+              allOf:
+                - $ref: '#/components/schemas/CustomerTrustProfile'
+              nullable: true
+              description: Present when caller is an owner or the profile owner
+            owner_reviews:
+              type: array
+              items: { $ref: '#/components/schemas/OwnerReviewOnProfile' }
+              description: Present when caller is an owner or the profile owner
+
+    # ── Owners / Branches ────────────────────────────────────────────────────
+
+    BranchRequest:
+      type: object
+      required: [name, address, lat, lng]
+      properties:
+        name:    { type: string }
+        address: { type: string }
+        lat:     { type: number, format: double }
+        lng:     { type: number, format: double }
+        phone:   { type: string, nullable: true }
+
+    Branch:
+      type: object
+      required: [id, owner_id, name, address, lat, lng, created_at]
+      properties:
+        id:         { type: string, format: uuid }
+        owner_id:   { type: string, format: uuid }
+        name:       { type: string }
+        address:    { type: string }
+        lat:        { type: number, format: double }
+        lng:        { type: number, format: double }
+        phone:      { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    # ── Services ─────────────────────────────────────────────────────────────
+
+    ServiceRequest:
+      type: object
+      required: [branch_id, name, min_duration, max_duration, capacity, capacity_type, price_per_unit]
+      properties:
+        branch_id:   { type: string, format: uuid }
+        category_id: { type: string, format: uuid, nullable: true }
+        name:        { type: string }
+        description: { type: string, nullable: true }
+        min_duration:
+          type: integer
+          description: Minimum service duration in minutes
+        max_duration:
+          type: integer
+          description: Maximum service duration in minutes
+        capacity:      { type: integer, minimum: 1 }
+        capacity_type: { type: string, enum: [single, multi] }
+        price_per_unit:
+          type: integer
+          description: Price in centavos
+        allows_participants:
+          type: boolean
+          nullable: true
+          description: |
+            Owner override for participant eligibility.
+            null = inherit from category default (ADR-009).
+        tags:
+          type: array
+          items: { type: string }
+
+    Service:
+      type: object
+      required: [id, branch_id, name, min_duration, max_duration, capacity, capacity_type, price_per_unit, allows_participants, created_at]
+      properties:
+        id:            { type: string, format: uuid }
+        branch_id:     { type: string, format: uuid }
+        category_id:   { type: string, format: uuid, nullable: true }
+        name:          { type: string }
+        description:   { type: string, nullable: true }
+        min_duration:  { type: integer }
+        max_duration:  { type: integer }
+        capacity:      { type: integer }
+        capacity_type: { type: string, enum: [single, multi] }
+        price_per_unit:
+          type: integer
+          description: Price in centavos
+        allows_participants:
+          type: boolean
+          description: Resolved effective value — never the raw nullable (ADR-009)
+        tags:
+          type: array
+          items: { type: string }
+        avg_rating:    { type: number, format: float }
+        total_reviews: { type: integer }
+        created_at:    { type: string, format: date-time }
+
+    Category:
+      type: object
+      required: [id, name, slug]
+      properties:
+        id:        { type: string, format: uuid }
+        name:      { type: string }
+        slug:      { type: string }
+        icon_url:  { type: string, format: uri, nullable: true }
+        parent_id: { type: string, format: uuid, nullable: true }
+
+    # ── Availability ─────────────────────────────────────────────────────────
+
+    SlotResponse:
+      type: object
+      required: [start_time, end_time, remaining_capacity]
+      properties:
+        start_time:         { type: string, format: date-time }
+        end_time:           { type: string, format: date-time }
+        remaining_capacity: { type: integer }
+
+    AvailabilityRuleRequest:
+      type: object
+      required: [day_of_week, start_time, end_time, is_active]
+      properties:
+        day_of_week:
+          type: integer
+          minimum: 0
+          maximum: 6
+          description: 0 = Sunday … 6 = Saturday
+        start_time: { type: string, example: "09:00" }
+        end_time:   { type: string, example: "18:00" }
+        is_active:  { type: boolean }
+
+    AvailabilityRule:
+      type: object
+      required: [id, branch_id, day_of_week, start_time, end_time, is_active, created_at]
+      properties:
+        id:          { type: string, format: uuid }
+        branch_id:   { type: string, format: uuid }
+        day_of_week: { type: integer }
+        start_time:  { type: string }
+        end_time:    { type: string }
+        is_active:   { type: boolean }
+        created_at:  { type: string, format: date-time }
+
+    DateOverrideRequest:
+      type: object
+      required: [date, is_closed]
+      properties:
+        date:       { type: string, format: date }
+        is_closed:  { type: boolean }
+        open_time:
+          type: string
+          nullable: true
+          example: "10:00"
+          description: Required when is_closed is false
+        close_time:
+          type: string
+          nullable: true
+          example: "20:00"
+          description: Required when is_closed is false
+        note: { type: string, nullable: true }
+
+    DateOverride:
+      type: object
+      required: [id, branch_id, date, is_closed, created_at]
+      properties:
+        id:         { type: string, format: uuid }
+        branch_id:  { type: string, format: uuid }
+        date:       { type: string, format: date }
+        is_closed:  { type: boolean }
+        open_time:  { type: string, nullable: true }
+        close_time: { type: string, nullable: true }
+        note:       { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    CalendarDay:
+      type: object
+      required: [date, source]
+      properties:
+        date:       { type: string, format: date }
+        is_closed:  { type: boolean }
+        open_time:  { type: string, nullable: true }
+        close_time: { type: string, nullable: true }
+        source:
+          type: string
+          enum: [override, rule, closed]
+          description: Which data source produced this day's hours (ADR-005)
+
+    # ── Bookings ─────────────────────────────────────────────────────────────
+
+    CreateLockRequest:
+      type: object
+      required: [service_id, branch_id, start_time, end_time, quantity]
+      properties:
+        service_id: { type: string, format: uuid }
+        branch_id:  { type: string, format: uuid }
+        start_time: { type: string, format: date-time }
+        end_time:   { type: string, format: date-time }
+        quantity:   { type: integer, minimum: 1, default: 1 }
+
+    BookingLock:
+      type: object
+      required: [id, service_id, branch_id, start_time, end_time, quantity, expires_at, created_at]
+      properties:
+        id:         { type: string, format: uuid }
+        service_id: { type: string, format: uuid }
+        branch_id:  { type: string, format: uuid }
+        start_time: { type: string, format: date-time }
+        end_time:   { type: string, format: date-time }
+        quantity:   { type: integer }
+        expires_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+
+    CreateBookingRequest:
+      type: object
+      required: [lock_id, service_id, branch_id, start_time, end_time, quantity]
+      properties:
+        lock_id:    { type: string, format: uuid }
+        service_id: { type: string, format: uuid }
+        branch_id:  { type: string, format: uuid }
+        start_time: { type: string, format: date-time }
+        end_time:   { type: string, format: date-time }
+        quantity:   { type: integer, minimum: 1 }
+        payment_method:
+          type: string
+          enum: [card, gcash, maya]
+          nullable: true
+
+    BookingResponse:
+      type: object
+      required: [id, service_id, branch_id, customer_id, start_time, end_time, quantity, status, currency, reschedule_attempt_count, created_at]
+      properties:
+        id:                          { type: string, format: uuid }
+        service_id:                  { type: string, format: uuid }
+        branch_id:                   { type: string, format: uuid }
+        customer_id:                 { type: string, format: uuid }
+        start_time:                  { type: string, format: date-time }
+        end_time:                    { type: string, format: date-time }
+        quantity:                    { type: integer }
         status:
           type: string
           enum: [pending, awaiting_approval, confirmed, rejected, cancelled, rescheduled, completed]
-        currency:     { type: string, example: PHP }
+        payment_method:              { type: string, nullable: true }
+        owner_response_deadline:     { type: string, format: date-time, nullable: true }
+        rescheduled_from_booking_id: { type: string, format: uuid, nullable: true }
+        reschedule_attempt_count:    { type: integer }
+        rejected_reason:             { type: string, nullable: true }
+        cancelled_by:                { type: string, nullable: true }
+        currency:                    { type: string, example: PHP }
+        created_at:                  { type: string, format: date-time }
+
+    RescheduleRequestBody:
+      type: object
+      required: [new_start_time, new_end_time]
+      properties:
+        new_start_time: { type: string, format: date-time }
+        new_end_time:   { type: string, format: date-time }
+
+    RescheduleRequestResponse:
+      type: object
+      required: [id, booking_id, requested_by, new_start_time, new_end_time, status, created_at]
+      properties:
+        id:             { type: string, format: uuid }
+        booking_id:     { type: string, format: uuid }
+        requested_by:   { type: string, format: uuid }
+        new_start_time: { type: string, format: date-time }
+        new_end_time:   { type: string, format: date-time }
+        status:
+          type: string
+          enum: [pending, approved, rejected]
+        created_at: { type: string, format: date-time }
+
+    CancelRequest:
+      type: object
+      properties:
+        reason: { type: string, nullable: true }
+
+    RejectBookingRequest:
+      type: object
+      properties:
+        reason: { type: string }
+
+    CustomerTrustData:
+      type: object
+      properties:
+        total_bookings:      { type: integer }
+        completed_bookings:  { type: integer }
+        completion_rate:     { type: number, format: float }
+        avg_owner_rating:    { type: number, format: float }
+        total_owner_reviews: { type: integer }
+
+    QueueItemResponse:
+      allOf:
+        - $ref: '#/components/schemas/BookingResponse'
+        - type: object
+          required: [service_name, branch_name, customer_name]
+          properties:
+            service_name:  { type: string }
+            branch_name:   { type: string }
+            customer_name: { type: string }
+            customer_trust:
+              allOf:
+                - $ref: '#/components/schemas/CustomerTrustData'
+              nullable: true
+
+    # ── Payments ─────────────────────────────────────────────────────────────
+
+    CreateIntentRequest:
+      type: object
+      required: [booking_id, amount_centavos, method]
+      properties:
+        booking_id:
+          type: string
+          format: uuid
+        amount_centavos:
+          type: integer
+          minimum: 1
+          description: Amount in centavos (₱1 = 100)
+        method:
+          type: string
+          enum: [card, gcash, maya]
+
+    PaymentIntentResponse:
+      type: object
+      required: [id, booking_id, paymongo_id, amount_centavos, currency, status, created_at]
+      properties:
+        id:              { type: string, format: uuid }
+        booking_id:      { type: string, format: uuid }
+        paymongo_id:     { type: string }
+        amount_centavos: { type: integer }
+        currency:        { type: string, example: PHP }
+        method:          { type: string, nullable: true }
+        method_type:
+          type: string
+          enum: [auth_capture, immediate_capture]
+          nullable: true
+          description: auth_capture = card; immediate_capture = gcash/maya
+        status:       { type: string }
+        checkout_url:
+          type: string
+          format: uri
+          nullable: true
+          description: GCash/Maya redirect URL. Null for card payments.
         created_at:   { type: string, format: date-time }
+
+    # ── Notifications ────────────────────────────────────────────────────────
+
+    Notification:
+      type: object
+      required: [id, user_id, type, title, body, is_read, created_at]
+      properties:
+        id:         { type: string, format: uuid }
+        user_id:    { type: string, format: uuid }
+        type:       { type: string }
+        title:      { type: string }
+        body:       { type: string }
+        data:       { type: object, additionalProperties: true, nullable: true }
+        is_read:    { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    RegisterTokenRequest:
+      type: object
+      required: [token, platform]
+      properties:
+        token:    { type: string }
+        platform: { type: string, enum: [ios, android] }
+
+    # ── Reviews ───────────────────────────────────────────────────────────────
+
+    SubmitReviewRequest:
+      type: object
+      required: [booking_id, service_id, branch_id, rating]
+      properties:
+        booking_id:   { type: string, format: uuid }
+        service_id:   { type: string, format: uuid }
+        branch_id:    { type: string, format: uuid }
+        rating:       { type: integer, minimum: 1, maximum: 5 }
+        body:         { type: string, maxLength: 1000, nullable: true }
+        is_anonymous: { type: boolean, default: false }
+
+    ReviewResponse:
+      type: object
+      required: [id, review_id, owner_id, body, created_at]
+      properties:
+        id:         { type: string, format: uuid }
+        review_id:  { type: string, format: uuid }
+        owner_id:   { type: string, format: uuid }
+        body:       { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time, nullable: true }
+
+    ReviewPublicView:
+      type: object
+      required: [id, rating, is_anonymous, status, submitted_at]
+      properties:
+        id:           { type: string, format: uuid }
+        rating:       { type: integer, minimum: 1, maximum: 5 }
+        body:         { type: string, nullable: true }
+        is_anonymous: { type: boolean }
+        customer_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Omitted when is_anonymous is true
+        status:       { type: string }
+        submitted_at: { type: string, format: date-time }
+        response:
+          allOf:
+            - $ref: '#/components/schemas/ReviewResponse'
+          nullable: true
+
+    RatingSummary:
+      type: object
+      required: [service_id, total_reviews, avg_rating]
+      properties:
+        service_id:    { type: string, format: uuid }
+        total_reviews: { type: integer }
+        avg_rating:    { type: number, format: float }
+        five_star:     { type: integer }
+        four_star:     { type: integer }
+        three_star:    { type: integer }
+        two_star:      { type: integer }
+        one_star:      { type: integer }
+
+    FlagReviewRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          enum: [spam, offensive, fake, irrelevant]
+
+    ReviewResponseRequest:
+      type: object
+      required: [body]
+      properties:
+        body: { type: string, maxLength: 500 }
+
+    # ── Search ────────────────────────────────────────────────────────────────
+
+    ServiceResult:
+      type: object
+      required: [id, name, price_per_unit, min_duration, max_duration, capacity_type, allows_participants, branch_id, branch_name, branch_address, distance_meters, avg_rating, total_reviews]
+      properties:
+        id:                  { type: string, format: uuid }
+        name:                { type: string }
+        description:         { type: string, nullable: true }
+        price_per_unit:      { type: integer, description: In centavos }
+        min_duration:        { type: integer }
+        max_duration:        { type: integer }
+        capacity_type:       { type: string, enum: [single, multi] }
+        allows_participants: { type: boolean }
+        branch_id:           { type: string, format: uuid }
+        branch_name:         { type: string }
+        branch_address:      { type: string }
+        distance_meters:     { type: number, format: double }
+        category_id:         { type: string, format: uuid, nullable: true }
+        category_name:       { type: string, nullable: true }
+        avg_rating:          { type: number, format: float }
+        total_reviews:       { type: integer }
+        tags:                { type: array, items: { type: string } }
+
+    SearchResponse:
+      type: object
+      required: [results, total]
+      properties:
+        results: { type: array, items: { $ref: '#/components/schemas/ServiceResult' } }
+        total:   { type: integer }
+
+    # ── Customer Reviews ──────────────────────────────────────────────────────
+
+    SubmitCustomerReviewRequest:
+      type: object
+      required: [booking_id, rating]
+      properties:
+        booking_id: { type: string, format: uuid }
+        rating:     { type: integer, minimum: 1, maximum: 5 }
+        body:       { type: string, nullable: true }
+
+    CustomerReview:
+      type: object
+      required: [id, booking_id, customer_id, owner_id, branch_id, rating, status, submitted_at]
+      properties:
+        id:           { type: string, format: uuid }
+        booking_id:   { type: string, format: uuid }
+        customer_id:  { type: string, format: uuid }
+        owner_id:     { type: string, format: uuid }
+        branch_id:    { type: string, format: uuid }
+        rating:       { type: integer, minimum: 1, maximum: 5 }
+        body:         { type: string, nullable: true }
+        status:
+          type: string
+          enum: [published, removed]
+        submitted_at: { type: string, format: date-time }
+
+    DisputeRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          enum: [inaccurate, inappropriate, not_my_booking, retaliation]
+        details: { type: string, nullable: true }
+
+    CustomerReviewDispute:
+      type: object
+      required: [id, customer_review_id, customer_id, reason, status, created_at]
+      properties:
+        id:                  { type: string, format: uuid }
+        customer_review_id:  { type: string, format: uuid }
+        customer_id:         { type: string, format: uuid }
+        reason:
+          type: string
+          enum: [inaccurate, inappropriate, not_my_booking, retaliation]
+        details:    { type: string, nullable: true }
+        status:     { type: string, enum: [open, resolved] }
+        created_at: { type: string, format: date-time }
+
+    # ── Participants ──────────────────────────────────────────────────────────
+
+    InviteParticipantRequest:
+      type: object
+      required: [user_id]
+      properties:
+        user_id: { type: string, format: uuid }
+
+    RespondParticipantRequest:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [accept, decline]
+
+    BookingParticipant:
+      type: object
+      required: [id, booking_id, user_id, invited_by, status, invited_at]
+      properties:
+        id:           { type: string, format: uuid }
+        booking_id:   { type: string, format: uuid }
+        user_id:      { type: string, format: uuid }
+        invited_by:   { type: string, format: uuid }
+        status:
+          type: string
+          enum: [pending, accepted, declined, left]
+        invited_at:   { type: string, format: date-time }
+        responded_at: { type: string, format: date-time, nullable: true }
+        left_at:      { type: string, format: date-time, nullable: true }
+
+    BookedWithUser:
+      type: object
+      required: [user_id]
+      properties:
+        user_id: { type: string, format: uuid }
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid JWT
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: unauthorized, message: "Missing or invalid authorization token" }
+
+    Forbidden:
+      description: Authenticated but insufficient role or ownership
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: forbidden, message: "Insufficient permissions" }
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: not_found, message: "Resource not found" }
+
+    Conflict:
+      description: Conflict with existing state
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+    UnprocessableEntity:
+      description: Business rule violation
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+    ValidationError:
+      description: Invalid request body or parameters
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: validation_error, message: "field 'email' is required" }
 
 security:
   - bearerAuth: []
 
 paths:
+  # ── Health ──────────────────────────────────────────────────────────────────
+
   /health:
     get:
       summary: Health check
       security: []
+      operationId: healthCheck
       responses:
         '200':
-          description: OK
-
-  # Auth
-  /auth/register:
-    post:
-      summary: Register a new user
-      security: []
-      tags: [Auth]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [email, password, role]
-              properties:
-                email:    { type: string, format: email }
-                password: { type: string, minLength: 8 }
-                phone:    { type: string }
-                role:     { type: string, enum: [customer, owner] }
-      responses:
-        '201': { description: Created }
-        '400': { description: Validation error }
-        '409': { description: Email already registered }
-
-  /auth/login:
-    post:
-      summary: Login
-      security: []
-      tags: [Auth]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [email, password]
-              properties:
-                email:    { type: string }
-                password: { type: string }
-      responses:
-        '200':
-          description: JWT token
+          description: Service is healthy
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  token: { type: string }
-        '401': { description: Invalid credentials }
+                  status: { type: string, example: ok }
+                  time:   { type: string, format: date-time }
 
-  # Search
-  /search:
+  # ── Auth ────────────────────────────────────────────────────────────────────
+
+  /auth/register:
+    post:
+      summary: Register with email and password
+      operationId: register
+      security: []
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '201':
+          description: Account created, JWT returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '409':
+          description: Email already registered
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: email_taken, message: "An account with this email already exists" }
+
+  /auth/login:
+    post:
+      summary: Login with email and password
+      operationId: login
+      security: []
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Authenticated, JWT returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenResponse' }
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: invalid_credentials, message: "Email or password is incorrect" }
+
+  /auth/sso:
+    post:
+      summary: Sign in or sign up with Google, Facebook, or Apple
+      operationId: ssoAuth
+      security: []
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SSORequest' }
+      responses:
+        '200':
+          description: Authenticated — returning user or newly created account
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '409':
+          description: |
+            Email collision — the provider's email belongs to an existing account.
+            Present a verification screen and call POST /auth/sso/verify-link.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmailCollisionResponse' }
+
+  /auth/sso/verify-link:
+    post:
+      summary: Complete account linking after an email collision
+      operationId: ssoVerifyLink
+      security: []
+      tags: [Auth]
+      description: |
+        Two mutually exclusive verification paths:
+        - **OTP path**: include `otp` (the code from POST /auth/send-otp)
+        - **Re-auth path**: include `provider_token` (a fresh token from an existing linked provider)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VerifyLinkRequest' }
+      responses:
+        '200':
+          description: Identity linked, JWT returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401':
+          description: OTP invalid or expired; pending_link_token invalid or expired
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: invalid_otp, message: "OTP is incorrect or has expired" }
+
+  /auth/send-otp:
+    post:
+      summary: Send a 6-digit OTP to an email address
+      operationId: sendOTP
+      security: []
+      tags: [Auth]
+      description: Always returns 200 regardless of whether the email exists (prevents account enumeration).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SendOTPRequest' }
+      responses:
+        '200':
+          description: OTP dispatched (or silently dropped when email not found)
+
+  /auth/verify-otp:
+    post:
+      summary: Verify a standalone OTP for email verification
+      operationId: verifyOTP
+      security: []
+      tags: [Auth]
+      description: |
+        Standalone email-verification flow. For account-linking OTP use POST /auth/sso/verify-link.
+        After 3 failed attempts the OTP is deleted and a new code must be requested.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VerifyOTPRequest' }
+      responses:
+        '200':
+          description: OTP valid; email_verified set to true, JWT returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenResponse' }
+        '401':
+          description: OTP invalid, expired, or max attempts exceeded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: invalid_otp, message: "OTP is incorrect or has expired" }
+
+  /auth/password:
+    put:
+      summary: Add or change password (authenticated)
+      operationId: setPassword
+      tags: [Auth]
+      description: Allows an SSO-only user to add email+password login. SSO identities remain active.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AddPasswordRequest' }
+      responses:
+        '200':
+          description: Password set
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ── Users ───────────────────────────────────────────────────────────────────
+
+  /users/me:
     get:
-      summary: Search services by location and keyword
+      summary: Get current user's own profile
+      operationId: getMe
+      tags: [Users]
+      responses:
+        '200':
+          description: Current user's full profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FullProfileResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /users/me/profile:
+    put:
+      summary: Update current user's profile fields
+      operationId: updateProfile
+      tags: [Users]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateProfileRequest' }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FullProfileResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /users/me/photo/upload-url:
+    post:
+      summary: Get a pre-signed S3 URL for profile photo upload
+      operationId: getPhotoUploadURL
+      tags: [Users]
+      description: |
+        Step 1 of the profile photo flow. Upload the image bytes directly to S3
+        using the returned `upload_url`, then call POST /users/me/photo/confirm.
+        Never stream file bytes through the API server.
+      responses:
+        '200':
+          description: Pre-signed upload URL and final CDN URL
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PhotoUploadURLResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /users/me/photo/confirm:
+    post:
+      summary: Confirm profile photo upload (sets profile_photo_url)
+      operationId: confirmPhoto
+      tags: [Users]
+      description: Step 3 of the profile photo flow. Stores the CDN URL, never the upload URL.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConfirmPhotoRequest' }
+      responses:
+        '200':
+          description: Profile photo URL updated
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ── Profiles ────────────────────────────────────────────────────────────────
+
+  /users/{id}/profile:
+    get:
+      summary: Get a user's public profile
+      operationId: getUserProfile
+      tags: [Profiles]
+      description: |
+        Role-aware response (enforced in the service layer):
+        - **Owner** caller → `FullProfileResponse` with `trust` and `owner_reviews`
+        - **Customer** viewing another customer → `BasicProfileResponse` (name, photo, join date only)
+        - **Any user** viewing their own profile → `FullProfileResponse`
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: User profile (shape depends on caller role)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/FullProfileResponse'
+                  - $ref: '#/components/schemas/BasicProfileResponse'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Owners ──────────────────────────────────────────────────────────────────
+
+  /owner/onboard:
+    post:
+      summary: Complete owner onboarding
+      operationId: ownerOnboard
+      tags: [Owners]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [business_name]
+              properties:
+                business_name:  { type: string }
+                business_phone: { type: string }
+      responses:
+        '201':
+          description: Owner record created
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Owner record already exists for this user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /owner/branches:
+    get:
+      summary: List the owner's branches
+      operationId: listBranches
+      tags: [Owners]
+      responses:
+        '200':
+          description: List of branches
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Branch' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      summary: Create a branch
+      operationId: createBranch
+      tags: [Owners]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BranchRequest' }
+      responses:
+        '201':
+          description: Branch created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Branch' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /owner/branches/{id}:
+    get:
+      summary: Get a specific branch
+      operationId: getBranch
+      tags: [Owners]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Branch
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Branch' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      summary: Update a branch
+      operationId: updateBranch
+      tags: [Owners]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BranchRequest' }
+      responses:
+        '200':
+          description: Updated branch
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Branch' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      summary: Soft-delete a branch
+      operationId: deleteBranch
+      tags: [Owners]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204':
+          description: Branch soft-deleted (deleted_at set)
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Services ────────────────────────────────────────────────────────────────
+
+  /services/{id}:
+    get:
+      summary: Get a service by ID (public)
+      operationId: getService
+      security: []
+      tags: [Services]
+      description: Returns the resolved `allows_participants` boolean (never the raw nullable field).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Service details
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Service' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /owner/services:
+    get:
+      summary: List the owner's services
+      operationId: listOwnerServices
+      tags: [Services]
+      parameters:
+        - name: branch_id
+          in: query
+          schema: { type: string, format: uuid }
+          description: Filter by branch
+      responses:
+        '200':
+          description: List of services
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Service' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      summary: Create a service
+      operationId: createService
+      tags: [Services]
+      description: Triggers active Redis cache invalidation for all Geohash-5 cells within 10km.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ServiceRequest' }
+      responses:
+        '201':
+          description: Service created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Service' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /owner/services/{id}:
+    get:
+      summary: Get a specific service (owner view)
+      operationId: getOwnerService
+      tags: [Services]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Service
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Service' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      summary: Update a service
+      operationId: updateService
+      tags: [Services]
+      description: |
+        Setting `allows_participants` here sets the owner override (ADR-009).
+        Triggers Redis cache invalidation for all Geohash-5 cells within 10km.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ServiceRequest' }
+      responses:
+        '200':
+          description: Updated service
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Service' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      summary: Soft-delete a service
+      operationId: deleteService
+      tags: [Services]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204':
+          description: Service soft-deleted
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /categories:
+    get:
+      summary: List all service categories
+      operationId: listCategories
       security: []
       tags: [Search]
-      parameters:
-        - name: lat
-          in: query
-          required: true
-          schema: { type: number }
-        - name: lng
-          in: query
-          required: true
-          schema: { type: number }
-        - name: q
-          in: query
-          schema: { type: string }
-        - name: category
-          in: query
-          schema: { type: string }
-        - name: radius
-          in: query
-          schema: { type: integer, default: 5000 }
-        - name: page
-          in: query
-          schema: { type: integer, default: 0 }
       responses:
-        '200': { description: List of services }
+        '200':
+          description: Flat list of categories (includes parent_id for tree reconstruction)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Category' }
 
-  # Availability
+  # ── Availability ────────────────────────────────────────────────────────────
+
   /availability:
     get:
       summary: Get available slots for a service on a date
+      operationId: getSlots
+      security: []
       tags: [Availability]
+      description: |
+        Computed at query time from availability rules + date overrides (ADR-005).
+        Date overrides always win over weekly rules.
       parameters:
-        - name: service_id
+        - name: branch_id
           in: query
           required: true
           schema: { type: string, format: uuid }
-        - name: branch_id
+        - name: service_id
           in: query
           required: true
           schema: { type: string, format: uuid }
@@ -151,50 +1388,309 @@ paths:
           in: query
           required: true
           schema: { type: string, format: date }
+          description: YYYY-MM-DD in Asia/Manila timezone
       responses:
-        '200': { description: Available slots }
+        '200':
+          description: Available slots for the date (empty array if branch is closed)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SlotResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
 
-  # Bookings
-  /bookings/lock:
+  /owner/branches/{id}/availability/rules:
+    get:
+      summary: List weekly availability rules for a branch
+      operationId: listAvailabilityRules
+      tags: [Availability]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Weekly rules
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AvailabilityRule' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     post:
-      summary: Lock a slot before payment
-      tags: [Bookings]
+      summary: Create or replace a weekly availability rule
+      operationId: upsertAvailabilityRule
+      tags: [Availability]
+      description: One rule per day_of_week per branch. Upserting replaces any existing rule for that day.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [service_id, branch_id, start_time, end_time]
-              properties:
-                service_id:  { type: string, format: uuid }
-                branch_id:   { type: string, format: uuid }
-                start_time:  { type: string, format: date-time }
-                end_time:    { type: string, format: date-time }
-                quantity:    { type: integer, default: 1 }
+            schema: { $ref: '#/components/schemas/AvailabilityRuleRequest' }
       responses:
-        '201': { description: Lock created }
-        '409': { description: Slot unavailable }
+        '200':
+          description: Rule created or updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AvailabilityRule' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /owner/branches/{id}/availability/rules/{rule_id}:
+    put:
+      summary: Update a specific weekly rule
+      operationId: updateAvailabilityRule
+      tags: [Availability]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: rule_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AvailabilityRuleRequest' }
+      responses:
+        '200':
+          description: Updated rule
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AvailabilityRule' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      summary: Delete a weekly rule
+      operationId: deleteAvailabilityRule
+      tags: [Availability]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: rule_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204':
+          description: Rule deleted
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /owner/branches/{id}/availability/overrides:
+    get:
+      summary: List date overrides for a branch
+      operationId: listDateOverrides
+      tags: [Availability]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Date overrides
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/DateOverride' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      summary: Create or replace a date override
+      operationId: upsertDateOverride
+      tags: [Availability]
+      description: One override per date per branch. Overrides always beat weekly rules (ADR-005).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DateOverrideRequest' }
+      responses:
+        '200':
+          description: Override created or updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DateOverride' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /owner/branches/{id}/availability/overrides/{override_id}:
+    delete:
+      summary: Delete a date override
+      operationId: deleteDateOverride
+      tags: [Availability]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: override_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204':
+          description: Override deleted
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /owner/branches/{id}/calendar:
+    get:
+      summary: Merged availability calendar for a branch (month view)
+      operationId: getBranchCalendar
+      tags: [Availability]
+      description: |
+        Returns one entry per calendar day showing the effective hours after applying
+        date overrides over weekly rules. This is exactly what customers see when
+        querying slots. Use to verify branch availability configuration.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: month
+          in: query
+          required: true
+          schema: { type: string, example: "2026-04" }
+          description: Month to display (YYYY-MM)
+      responses:
+        '200':
+          description: One CalendarDay per day in the requested month
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CalendarDay' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ── Bookings ────────────────────────────────────────────────────────────────
+
+  /bookings/lock:
+    post:
+      summary: Reserve a slot before initiating payment
+      operationId: createLock
+      tags: [Bookings]
+      description: |
+        Creates a short-lived slot lock (2–5 min TTL). Prevents concurrent bookings on
+        the same slot while the customer completes payment. Pass the returned `id` as
+        `lock_id` in the subsequent POST /bookings.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateLockRequest' }
+      responses:
+        '201':
+          description: Lock created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookingLock' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409':
+          description: Slot already booked or locked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: slot_unavailable, message: "The selected time slot is no longer available" }
 
   /bookings:
     post:
-      summary: Create a booking (after payment intent confirmed)
+      summary: Create a booking after payment is initiated
+      operationId: createBooking
       tags: [Bookings]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateBookingRequest' }
       responses:
         '201':
-          description: Booking created
+          description: Booking created (status = pending → awaiting_approval on payment confirmation)
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Booking' }
+              schema: { $ref: '#/components/schemas/BookingResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404':
+          description: Lock not found or expired
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: lock_not_found, message: "Slot lock not found or has expired" }
+        '409':
+          description: Slot taken since lock was acquired
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: slot_unavailable, message: "The selected time slot is no longer available" }
     get:
-      summary: List my bookings
+      summary: List current user's bookings
+      operationId: listBookings
       tags: [Bookings]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, awaiting_approval, confirmed, rejected, cancelled, rescheduled, completed]
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
       responses:
-        '200': { description: Booking list }
+        '200':
+          description: Paginated booking list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [bookings, total]
+                properties:
+                  bookings:
+                    type: array
+                    items: { $ref: '#/components/schemas/BookingResponse' }
+                  total: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
-  /bookings/{id}/cancel:
-    post:
-      summary: Cancel a booking
+  /bookings/{id}:
+    get:
+      summary: Get a single booking
+      operationId: getBooking
       tags: [Bookings]
       parameters:
         - name: id
@@ -202,13 +1698,55 @@ paths:
           required: true
           schema: { type: string, format: uuid }
       responses:
-        '200': { description: Cancelled }
-        '404': { description: Not found }
+        '200':
+          description: Booking
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookingResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /bookings/{id}/cancel:
+    post:
+      summary: Cancel a confirmed booking
+      operationId: cancelBooking
+      tags: [Bookings]
+      description: For GCash/Maya bookings a full refund is initiated (3–7 banking days).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CancelRequest' }
+      responses:
+        '200':
+          description: Booking cancelled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookingResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422':
+          description: Booking is not in a cancellable state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: illegal_state_transition, message: "Booking cannot be cancelled in its current state" }
 
   /bookings/{id}/reschedule:
     post:
-      summary: Request a reschedule
+      summary: Request a reschedule for a confirmed booking
+      operationId: requestReschedule
       tags: [Bookings]
+      description: |
+        The original booking stays `confirmed` throughout (ADR-002).
+        Max 3 reschedule attempts. Only one pending request per booking at a time
+        (enforced by a partial UNIQUE index).
       parameters:
         - name: id
           in: path
@@ -218,42 +1756,111 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [new_start_time, new_end_time]
-              properties:
-                new_start_time: { type: string, format: date-time }
-                new_end_time:   { type: string, format: date-time }
+            schema: { $ref: '#/components/schemas/RescheduleRequestBody' }
       responses:
-        '201': { description: Reschedule request submitted }
-        '409': { description: Pending reschedule already exists }
-        '422': { description: Attempt limit reached }
+        '201':
+          description: Reschedule request submitted; owner sees it in the approval queue
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RescheduleRequestResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: A pending reschedule request already exists for this booking
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: pending_reschedule_exists, message: "A pending reschedule request already exists for this booking" }
+        '422':
+          description: Reschedule attempt limit reached (max 3)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: reschedule_limit_reached, message: "Maximum reschedule attempts reached for this booking" }
 
-  # Owner — approval queue
+  # ── Owner Queue ─────────────────────────────────────────────────────────────
+
   /owner/queue:
     get:
-      summary: Get pending bookings and reschedule requests
-      tags: [Owner]
+      summary: List pending bookings and reschedule requests
+      operationId: getOwnerQueue
+      tags: [OwnerQueue]
+      description: |
+        Returns `awaiting_approval` bookings and `pending` reschedule requests across
+        all the owner's branches. Each item includes `customer_trust` pre-fetched from
+        `customer_trust_profiles` (ADR-007).
+      parameters:
+        - name: branch_id
+          in: query
+          schema: { type: string, format: uuid }
+          description: Filter by branch
       responses:
-        '200': { description: Approval queue items }
+        '200':
+          description: Queue items with customer trust data
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [bookings, reschedules]
+                properties:
+                  bookings:
+                    type: array
+                    items: { $ref: '#/components/schemas/QueueItemResponse' }
+                  reschedules:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/RescheduleRequestResponse'
+                        - type: object
+                          properties:
+                            original_booking:
+                              $ref: '#/components/schemas/BookingResponse'
+                            customer_trust:
+                              allOf:
+                                - $ref: '#/components/schemas/CustomerTrustData'
+                              nullable: true
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /owner/bookings/{id}/approve:
     post:
       summary: Approve a booking
-      tags: [Owner]
+      operationId: approveBooking
+      tags: [OwnerQueue]
+      description: |
+        Transitions booking from `awaiting_approval` to `confirmed`. For card payments,
+        triggers a PayMongo capture. Slot availability is re-validated inside the
+        transaction (race-condition safety).
       parameters:
         - name: id
           in: path
           required: true
           schema: { type: string, format: uuid }
       responses:
-        '200': { description: Approved }
-        '409': { description: Slot no longer available }
+        '200':
+          description: Booking confirmed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookingResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Slot no longer available (race condition during 24h window)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: slot_unavailable, message: "The selected time slot is no longer available" }
 
   /owner/bookings/{id}/reject:
     post:
       summary: Reject a booking
-      tags: [Owner]
+      operationId: rejectBooking
+      tags: [OwnerQueue]
+      description: |
+        Transitions booking from `awaiting_approval` to `rejected`.
+        Cards: authorization hold is voided. GCash/Maya: full refund initiated.
       parameters:
         - name: id
           in: path
@@ -262,97 +1869,309 @@ paths:
       requestBody:
         content:
           application/json:
-            schema:
-              type: object
-              properties:
-                reason: { type: string }
+            schema: { $ref: '#/components/schemas/RejectBookingRequest' }
       responses:
-        '200': { description: Rejected }
+        '200':
+          description: Booking rejected; void or refund initiated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookingResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /owner/reschedules/{id}/approve:
     post:
       summary: Approve a reschedule request
-      tags: [Owner]
+      operationId: approveReschedule
+      tags: [OwnerQueue]
+      description: |
+        Atomic transaction (ADR-002): re-checks slot availability, sets original booking
+        to `rescheduled`, inserts a new `confirmed` booking (no second approval cycle).
+        Returns the new booking.
       parameters:
         - name: id
           in: path
           required: true
           schema: { type: string, format: uuid }
       responses:
-        '200': { description: Reschedule approved, new booking created }
-        '409': { description: New slot unavailable }
+        '200':
+          description: Reschedule approved; new confirmed booking returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookingResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: New slot is no longer available; original booking unchanged
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: slot_unavailable, message: "The requested new slot is no longer available" }
 
   /owner/reschedules/{id}/reject:
     post:
       summary: Reject a reschedule request
-      tags: [Owner]
+      operationId: rejectReschedule
+      tags: [OwnerQueue]
+      description: Sets the reschedule request to `rejected`. Original booking stays `confirmed`.
       parameters:
         - name: id
           in: path
           required: true
           schema: { type: string, format: uuid }
       responses:
-        '200': { description: Rejected, original booking stays confirmed }
+        '200':
+          description: Request rejected; original booking unchanged
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RescheduleRequestResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
-  # Payments
+  # ── Payments ────────────────────────────────────────────────────────────────
+
   /payments/intent:
     post:
       summary: Create a PayMongo payment intent
+      operationId: createPaymentIntent
       tags: [Payments]
+      description: |
+        - **card**: creates an authorization hold (captured on approval, voided on rejection)
+        - **gcash / maya**: creates an immediate capture (refunded on rejection)
+
+        GCash/Maya returns a `checkout_url` for redirect. Card returns without `checkout_url`;
+        use the PayMongo JS SDK for card collection client-side.
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [booking_id, method]
-              properties:
-                booking_id: { type: string, format: uuid }
-                method:     { type: string, enum: [card, gcash, maya] }
+            schema: { $ref: '#/components/schemas/CreateIntentRequest' }
       responses:
         '201':
           description: Payment intent created
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  client_key:         { type: string }
-                  payment_intent_id:  { type: string }
+              schema: { $ref: '#/components/schemas/PaymentIntentResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404':
+          description: Booking not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   /payments/webhook:
     post:
-      summary: PayMongo webhook receiver
+      summary: PayMongo webhook event receiver
+      operationId: handleWebhook
       security: []
       tags: [Payments]
-      responses:
-        '200': { description: Acknowledged }
-
-  # Reviews
-  /reviews:
-    post:
-      summary: Submit a review for a completed booking
-      tags: [Reviews]
+      description: |
+        Signature is verified against `PAYMONGO_WEBHOOK_SECRET` before processing.
+        Events deduplicated via `webhook_events` table. Always returns 200 after logging
+        to satisfy PayMongo's retry policy — processing is idempotent.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [booking_id, rating]
-              properties:
-                booking_id:   { type: string, format: uuid }
-                rating:       { type: integer, minimum: 1, maximum: 5 }
-                body:         { type: string, maxLength: 1000 }
-                is_anonymous: { type: boolean, default: false }
+              description: PayMongo event payload
       responses:
-        '201': { description: Review submitted }
-        '409': { description: Review already exists for this booking }
-        '422': { description: Booking not completed or outside 14-day window }
+        '200':
+          description: Event acknowledged
+        '401':
+          description: Webhook signature invalid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  # ── Notifications ────────────────────────────────────────────────────────────
+
+  /notifications:
+    get:
+      summary: List in-app notifications for the current user
+      operationId: listNotifications
+      tags: [Notifications]
+      parameters:
+        - name: unread_only
+          in: query
+          schema: { type: boolean, default: false }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        '200':
+          description: Notification feed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [notifications, total]
+                properties:
+                  notifications:
+                    type: array
+                    items: { $ref: '#/components/schemas/Notification' }
+                  total: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /notifications/{id}/read:
+    post:
+      summary: Mark a notification as read
+      operationId: markNotificationRead
+      tags: [Notifications]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Marked as read
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /notifications/read-all:
+    post:
+      summary: Mark all unread notifications as read
+      operationId: markAllNotificationsRead
+      tags: [Notifications]
+      responses:
+        '200':
+          description: All notifications marked as read
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /device-tokens:
+    post:
+      summary: Register a device token for push notifications
+      operationId: registerDeviceToken
+      tags: [Notifications]
+      description: |
+        Registers or refreshes a FCM (Android) or APNs (iOS) device token.
+        Re-registering an existing token is idempotent. Tokens are automatically
+        deactivated on `invalid_token` responses from the push provider (ADR-006).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterTokenRequest' }
+      responses:
+        '200':
+          description: Token registered
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /device-tokens/{id}:
+    delete:
+      summary: Deregister a device token on logout
+      operationId: deleteDeviceToken
+      tags: [Notifications]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204':
+          description: Token deregistered (is_active set to false)
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Search ───────────────────────────────────────────────────────────────────
+
+  /search:
+    get:
+      summary: Search or browse nearby services
+      operationId: search
+      security: []
+      tags: [Search]
+      description: |
+        **Browse mode** (no `q`): sorted by `distance × 0.6 − rating × 0.4`.
+        Results cached in Redis by Geohash-5 cell (5-min TTL) per ADR-004.
+
+        **Search mode** (`q` present): PostgreSQL FTS sorted by relevance + `rating × 0.2`.
+        Feed cache is bypassed entirely.
+      parameters:
+        - name: lat
+          in: query
+          required: true
+          schema: { type: number, format: double }
+        - name: lng
+          in: query
+          required: true
+          schema: { type: number, format: double }
+        - name: q
+          in: query
+          schema: { type: string }
+          description: Keyword query — activates full-text search mode
+        - name: category
+          in: query
+          schema: { type: string }
+          description: Category slug filter
+        - name: radius
+          in: query
+          schema: { type: integer, default: 5000 }
+          description: Search radius in metres (default 5000, max 50000)
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SearchResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+
+  # ── Reviews ──────────────────────────────────────────────────────────────────
+
+  /reviews:
+    post:
+      summary: Submit a customer review for a completed booking
+      operationId: submitReview
+      tags: [Reviews]
+      description: |
+        One review per completed booking (UNIQUE on booking_id). 14-day window from
+        `booking.end_time` enforced by DB CHECK constraint — not duplicated in app code.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubmitReviewRequest' }
+      responses:
+        '201':
+          description: Review submitted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReviewPublicView' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409':
+          description: Review already submitted for this booking
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: already_reviewed, message: "You have already submitted a review for this booking" }
+        '422':
+          description: Booking not completed or outside 14-day window
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: review_window_expired, message: "The 14-day review window for this booking has closed" }
 
   /services/{id}/reviews:
     get:
-      summary: Get reviews for a service
+      summary: List reviews for a service
+      operationId: listServiceReviews
       security: []
       tags: [Reviews]
       parameters:
@@ -360,8 +2179,394 @@ paths:
           in: path
           required: true
           schema: { type: string, format: uuid }
-        - name: page
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 50 }
+        - name: offset
           in: query
           schema: { type: integer, default: 0 }
       responses:
-        '200': { description: Review list with responses }
+        '200':
+          description: Reviews with rating summary
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reviews, summary, total]
+                properties:
+                  reviews:
+                    type: array
+                    items: { $ref: '#/components/schemas/ReviewPublicView' }
+                  summary: { $ref: '#/components/schemas/RatingSummary' }
+                  total:   { type: integer }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /reviews/{id}/flag:
+    post:
+      summary: Flag a review for moderation
+      operationId: flagReview
+      tags: [Reviews]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FlagReviewRequest' }
+      responses:
+        '200':
+          description: Review flagged
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Already flagged by this user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: already_flagged, message: "You have already flagged this review" }
+
+  /reviews/{id}/response:
+    post:
+      summary: Submit an owner response to a review
+      operationId: submitReviewResponse
+      tags: [Reviews]
+      description: One response per review (UNIQUE on review_id). Caller must own the reviewed service.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReviewResponseRequest' }
+      responses:
+        '201':
+          description: Response submitted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReviewResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Response already exists for this review
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    put:
+      summary: Update an existing owner response
+      operationId: updateReviewResponse
+      tags: [Reviews]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReviewResponseRequest' }
+      responses:
+        '200':
+          description: Response updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReviewResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Customer Reviews ─────────────────────────────────────────────────────────
+
+  /customer-reviews:
+    post:
+      summary: Submit an owner's review of a customer
+      operationId: submitCustomerReview
+      tags: [CustomerReviews]
+      description: |
+        Requires owner role. One review per completed booking (UNIQUE on booking_id).
+        14-day window from booking.end_time. Review is published immediately and visible
+        to all owners.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubmitCustomerReviewRequest' }
+      responses:
+        '201':
+          description: Customer review submitted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CustomerReview' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Review already submitted for this booking
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: already_reviewed, message: "You have already reviewed this booking" }
+        '422':
+          description: Booking not completed or review window expired
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /users/{id}/customer-reviews:
+    get:
+      summary: List owner reviews written about a customer
+      operationId: listCustomerReviews
+      tags: [CustomerReviews]
+      description: |
+        Visibility: all owners (full list), the reviewed customer (own reviews only).
+        Other customers receive 403.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        '200':
+          description: Owner reviews about this customer
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reviews, total]
+                properties:
+                  reviews:
+                    type: array
+                    items: { $ref: '#/components/schemas/CustomerReview' }
+                  total: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /customer-reviews/{id}/dispute:
+    post:
+      summary: File a dispute against an owner review of yourself
+      operationId: disputeCustomerReview
+      tags: [CustomerReviews]
+      description: |
+        One dispute per review per customer (UNIQUE constraint).
+        The review stays published — disputes only trigger admin moderation.
+        Only admin can remove a review by setting status = 'removed'.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DisputeRequest' }
+      responses:
+        '201':
+          description: Dispute filed; review remains published pending admin review
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CustomerReviewDispute' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Review is not about the caller
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: not_your_review, message: "You can only dispute reviews written about you" }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Dispute already filed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: dispute_already_filed, message: "You have already filed a dispute for this review" }
+
+  # ── Participants ─────────────────────────────────────────────────────────────
+
+  /bookings/{id}/participants:
+    post:
+      summary: Invite a user as a participant on a booking
+      operationId: inviteParticipant
+      tags: [Participants]
+      description: |
+        Only the booking creator can invite. Eligibility is resolved first per ADR-009
+        — returns 403 if `allows_participants` resolves to false for the service.
+        Cannot invite once the booking is `completed`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InviteParticipantRequest' }
+      responses:
+        '201':
+          description: Participant invited; push notification queued to invited user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookingParticipant' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Not the booking creator, inviting self, or participants not allowed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: participants_not_allowed, message: "This service does not allow booking participants" }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: User already invited
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: already_invited, message: "This user has already been invited to the booking" }
+        '422':
+          description: Booking is completed — no changes allowed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: booking_completed, message: "Participants cannot be added to a completed booking" }
+    get:
+      summary: List participants on a booking
+      operationId: listParticipants
+      tags: [Participants]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Participant list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/BookingParticipant' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /bookings/{id}/participants/{user_id}/respond:
+    post:
+      summary: Accept or decline a participant invitation
+      operationId: respondToInvitation
+      tags: [Participants]
+      description: |
+        Only the invited user can respond. On `accept`, a `participant_accepted`
+        push notification is queued to the booking creator (async per ADR-006).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: user_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RespondParticipantRequest' }
+      responses:
+        '200':
+          description: Response recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookingParticipant' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Caller is not the invited participant
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: not_participant, message: "You are not a participant on this booking" }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422':
+          description: Booking is completed — no changes allowed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: booking_completed, message: "Cannot respond after the booking is completed" }
+
+  /bookings/{id}/participants/me/leave:
+    post:
+      summary: Leave a booking as an accepted participant
+      operationId: leaveBooking
+      tags: [Participants]
+      description: |
+        Sets `left_at` on the participant row. The row is never deleted.
+        Cannot leave once the booking is `completed`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Participant left; left_at set
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookingParticipant' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Caller is not a participant on this booking
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422':
+          description: Booking is completed — cannot leave
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: booking_completed, message: "You cannot leave a completed booking" }
+
+  /users/me/booked-with:
+    get:
+      summary: List users the current user has booked with
+      operationId: getBookedWith
+      tags: [Participants]
+      description: |
+        Returns users from completed bookings where the current user was the creator and
+        the other user accepted, OR where the current user was an accepted participant.
+        Only `status = 'accepted' AND left_at IS NULL AND booking.status = 'completed'`
+        rows are included.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        '200':
+          description: Booked-with user list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/BookedWithUser' }
+        '401': { $ref: '#/components/responses/Unauthorized' }

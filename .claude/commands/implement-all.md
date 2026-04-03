@@ -1,6 +1,6 @@
 # Implement all modules
 
-Implement all backend modules for the BookMo — a Booking Platform, tracking progress in `docs/implementation-progress.md` so work can be resumed correctly across sessions.
+Implement all backend modules for the booking platform, tracking progress in `docs/implementation-progress.md` so work can be resumed correctly across sessions.
 
 ## Step 1 — Read context
 
@@ -160,6 +160,33 @@ Key rules:
 - Never touch booking state, payment, or review logic from this module
 - Enqueue participant_invited and participant_accepted notifications via notification service — never send synchronously
 - GetBookedWith returns users from BOTH directions: bookings the user created where others accepted, AND bookings where this user accepted
+
+
+### 10. marketplace_payments
+Read `@docs/decisions/ADR-012-marketplace-payments.md` first.
+
+> **Swagger**: Annotate every handler with `swagger:route` and every struct with `swagger:model`. Document that all fee amounts use basis points. Note that admin endpoints require admin role.
+
+Implement:
+- `internal/marketplace/model.go` — OwnerPayoutAccount, OwnerEarning, OwnerPayout, BookingDispute, PlatformSettings, CategoryFeeRate, OwnerFeeOverride structs + DTOs
+- `internal/marketplace/repository.go` — GetOwnerFeeOverride, GetCategoryFeeRate, GetPlatformSettings, CreateEarning, ReleaseEarning, CreateDispute, ResolveDispute, CreatePayoutAccount, GetDefaultPayoutAccount, VerifyPayoutAccount, CreatePayout, UpdatePayoutStatus, GetPendingEarnings, GetReleasedEarnings
+- `internal/marketplace/fee.go` — ResolveFee (three-level priority, returns centavos + source string), always integer arithmetic with basis points
+- `internal/marketplace/service.go` — RegisterPayoutAccount, SetDefaultAccount, VerifyAccountOTP (GCash/Maya), RaiseDispute, GetEarnings, GetPayouts, UpdatePayoutSchedule
+- `internal/marketplace/scheduler.go` — ReleaseEarnings (finds expired dispute windows, creates owner_earnings rows), ProcessPayouts (batches released earnings per owner, initiates PayMongo transfer)
+- `internal/marketplace/paymongo_payouts.go` — PayMongo Payouts API client (initiate transfer, check status)
+- `internal/marketplace/handler.go` — owner endpoints: GET/POST/PUT/DELETE /owner/payout-accounts, POST /owner/payout-accounts/:id/verify-otp, GET /owner/earnings, GET /owner/payouts, PUT /owner/payout-schedule
+- `internal/marketplace/customer_handler.go` — POST /bookings/:id/dispute
+- `internal/marketplace/admin_handler.go` — admin endpoints: GET/POST /admin/disputes, POST /admin/disputes/:id/resolve, GET/POST /admin/payout-accounts/pending-verification, POST /admin/payout-accounts/:id/verify, POST/PUT /admin/fee-overrides, GET/PUT /admin/category-fee-rates, GET/PUT /admin/platform-settings
+- `internal/marketplace/errors.go` — ErrNoVerifiedPayoutAccount, ErrDisputeWindowClosed, ErrAlreadyDisputed, ErrInvalidFeeConfig, ErrPayoutFailed
+
+Key rules:
+- ALWAYS use integer arithmetic for fee calculation: `gross * bp / 10000` — never float
+- `net_amount_centavos` CHECK constraint will reject rows where net != gross - fee
+- Set `bookings.completed_at` atomically when transitioning status to 'completed' in the bookings module
+- One verified default account required before any payout can be initiated
+- Disputes must be raised before `completed_at + dispute_window_hours` — reject with ErrDisputeWindowClosed after that
+- Bank accounts require admin verification — GCash/Maya use OTP verification
+- ReleaseEarnings scheduler: query `bookings WHERE status = 'completed' AND completed_at + (dispute_window_hours * interval '1 hour') < now() AND id NOT IN (SELECT booking_id FROM owner_earnings) AND id NOT IN (SELECT booking_id FROM booking_disputes WHERE status IN ('open','under_review'))`
 
 ## Step 4 — After each module
 

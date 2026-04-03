@@ -1,3 +1,55 @@
+## API documentation
+
+**swagger:meta**
+The go-swagger annotation added to `cmd/api/main.go` that defines global API metadata: title ("Kadto — a Booking Platform"), host, base path, version, security definitions. Required once per project.
+
+**swagger:model**
+The go-swagger annotation added above a Go struct to include it in the generated OpenAPI spec as a reusable schema. Every struct used as a request or response body must have this annotation.
+
+**swagger:route**
+The go-swagger annotation added above a handler function that defines an API operation: HTTP method, path, tag, operationID, description, security requirements, parameters, and response codes.
+
+**swagger:parameters**
+A wrapper struct annotated with go-swagger to describe request parameters (path, query, body) for a specific operation. Named `{operationID}Body` by convention.
+
+**swagger:response**
+A wrapper struct annotated with go-swagger to describe a response body shape. Named `{modelName}Response` (single) or `{modelName}ListResponse` (array).
+
+**operationID**
+A globally unique camelCase identifier for an API operation. Used by go-swagger and by the frontend to reference specific endpoints. Format: verb + noun, e.g. `listBookings`, `approveBooking`, `getServiceReviews`. Must be unique across all modules.
+
+## Marketplace payments
+
+**Owner payout account**
+A registered account for receiving payouts from Kadto. Types: `gcash` (mobile number), `maya` (mobile number), `bank` (bank name + account number + account holder name). Must be verified before receiving payouts. One per owner is marked `is_default`. Stored in `owner_payout_accounts`.
+
+**Platform fee**
+The percentage or flat amount Kadto deducts from each booking's gross amount before paying the owner. Stored as basis points (BP) in `category_fee_rates` and `platform_settings`. Can be overridden per owner in `owner_fee_overrides`.
+
+**Basis points (BP)**
+The unit for all percentage fees. 1 BP = 0.01%, so 1000 BP = 10%. All fee percentages are stored and computed as integers in basis points to avoid floating-point arithmetic. Formula: `fee_centavos = gross_centavos * bp / 10000`.
+
+**Fee resolution**
+The three-level priority chain for determining the platform fee: `owner_fee_overrides` (negotiated rate) → `category_fee_rates` (default per category) → `platform_settings.default_fee_percent_bp` (global fallback). Always resolves to a centavo amount at the time of earning release.
+
+**Owner earning**
+A record in `owner_earnings` created when the dispute window expires cleanly for a completed booking. Contains `gross_amount_centavos`, `fee_centavos`, and `net_amount_centavos` (net = gross − fee, enforced by CHECK constraint). Status flows: `pending` → `released` → `paid_out`.
+
+**Dispute window**
+A configurable holding period (default 48 hours) after a booking is `completed` during which the customer can raise a dispute. Stored in `platform_settings.dispute_window_hours`. If no dispute is raised and the window expires, the scheduler releases the earning.
+
+**Booking dispute**
+A customer's formal challenge to a completed booking, raised before the dispute window expires. Stored in `booking_disputes`. Separate from `customer_review_disputes` (which is about review fairness). Admin resolves as `resolved_release` (payout proceeds) or `resolved_refund` (customer refunded, owner gets nothing).
+
+**Payout batch**
+A single PayMongo payout transfer initiated by the scheduler that combines all `released` earnings for an owner into one payment. Stored in `owner_payouts`. Owner chooses daily or weekly batching via `owners.payout_schedule`.
+
+**Payout schedule**
+The frequency at which the scheduler initiates payouts for an owner. Either `daily` (2am Manila time every day) or `weekly` (2am Manila time every Monday). Set by the owner in their settings. Stored in `owners.payout_schedule`.
+
+**completed_at**
+The timestamp set on `bookings` when `status` transitions to `'completed'`. Used to calculate when the dispute window opens and expires. Must be set atomically with the status transition.
+
 ## Authentication
 
 **SSO (Single Sign-On)**

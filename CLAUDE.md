@@ -1,4 +1,4 @@
-# BookMo — a Booking Platform — Claude Code Context
+# Booking Platform — Claude Code Context
 
 ## Project overview
 
@@ -19,9 +19,10 @@ Before implementing any module, read the relevant files below. Use `@filename` i
 - **@docs/decisions/ADR-008-booking-participants.md** — participant tagging, accept/decline flow, "booked with" history
 - **@docs/decisions/ADR-009-participant-eligibility.md** — category default + service override, resolution priority, eligibility query
 - **@docs/decisions/ADR-010-sso-authentication.md** — Google, Facebook, Apple SSO, email collision merge-with-verification, Apple name gotcha
+- **@docs/decisions/ADR-012-marketplace-payments.md** — owner payout accounts, platform fees (basis points), dispute window, earnings release, payout batching
 - **@docs/decisions/ADR-011-go-swagger-annotations.md** — go-swagger annotation conventions, tag list, operationID naming, regeneration command
 
-Read the relevant ADR before implementing: payments → ADR-001, bookings/reschedule → ADR-002, reviews → ADR-003, search → ADR-004, availability → ADR-005, notifications → ADR-006, profiles/customer-reviews → ADR-007, participants → ADR-008 + ADR-009, auth/SSO → ADR-010, swagger annotations → ADR-011.
+Read the relevant ADR before implementing: payments → ADR-001, bookings/reschedule → ADR-002, reviews → ADR-003, search → ADR-004, availability → ADR-005, notifications → ADR-006, profiles/customer-reviews → ADR-007, participants → ADR-008 + ADR-009, auth/SSO → ADR-010, swagger → ADR-011, marketplace payments → ADR-012.
 
 ---
 
@@ -191,6 +192,20 @@ Side exits: `rejected` (from awaiting_approval), `cancelled` (from confirmed), `
 - **Only accepted, non-left rows count for "booked with"** — always filter `status = 'accepted' AND left_at IS NULL AND b.status = 'completed'` in social history queries.
 - **Two notification types**: `participant_invited` (to invited user) and `participant_accepted` (to creator). Both are async via the notification queue per ADR-006.
 
+
+
+## Marketplace payments
+
+- **Fee is always basis points (BP)** — never floats, never percentages stored as decimals. 1000 BP = 10%. Always compute: `gross * bp / 10000` using integer arithmetic.
+- **Fee resolution priority**: `owner_fee_overrides` → `category_fee_rates` → `platform_settings.default_fee_percent_bp`. Compute the final centavo amount at release time; never store the percentage in `owner_earnings`.
+- **`net_amount_centavos = gross - fee` enforced by CHECK constraint** — the DB will reject any row where this does not hold. Never compute differently.
+- **`owner_earnings` is created when the dispute window expires cleanly** — not at booking completion. The scheduler job `ReleaseEarnings` creates it.
+- **Disputes block the earning** — when `booking_disputes.status = 'open'` or `'under_review'`, the corresponding `owner_earnings.status` must be `'disputed'`. Admin resolution sets it back to `'released'` (payout proceeds) or triggers a refund (earning deleted, customer refunded).
+- **Payout accounts must be verified before receiving payouts** — GCash/Maya verified via OTP, bank verified manually by admin. The scheduler skips unverified default accounts and flags them in `payout_alerts`.
+- **One default account per owner** — enforce in service layer before setting `is_default = true`: unset any existing default for that owner first.
+- **Payouts use basis points for fees too** — PayMongo transfer fees are deducted from `total_amount_centavos` before sending. Always record the actual amount sent.
+- **`bookings.completed_at`** — set when `bookings.status` transitions to `'completed'`. Used by the dispute window and earnings release scheduler.
+- **Bank account verification is admin-manual for MVP** — no micro-deposit automation. Admin calls `POST /admin/payout-accounts/:id/verify` after manual confirmation.
 
 ## go-swagger annotations (required on every handler and model — no exceptions)
 

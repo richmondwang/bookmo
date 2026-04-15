@@ -1,0 +1,5 @@
+# Moved to deploy/components/migrate/migrate-job.yaml
+#
+# The migration Job is now a kustomize Component so it can be included
+# by stage/prod overlays without triggering the kustomize security restriction
+# on cross-directory file references.

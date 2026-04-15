@@ -1,0 +1,136 @@
+# DEPRECATED: skaffold.yaml has moved to the project root.
+# Run all skaffold commands from the repository root:
+#
+#   skaffold dev
+#   skaffold run -p stage
+#   skaffold render -p stage
+#
+# This file is kept for reference only and is no longer used.
+
+apiVersion: skaffold/v4beta13
+kind: Config
+
+metadata:
+  name: kadto
+
+# ── Build ─────────────────────────────────────────────────────────────────────
+build:
+  # Replace "your-org" with your GitHub organisation name.
+  artifacts:
+    - image: ghcr.io/richmondwang/kadto-api
+      docker:
+        dockerfile: ../Dockerfile.api
+        # Pass build args here if needed, e.g. build args for secrets:
+        # buildArgs:
+        #   SOME_ARG: "value"
+
+    - image: ghcr.io/richmondwang/kadto-worker
+      docker:
+        dockerfile: ../Dockerfile.worker
+
+  local:
+    # Local builds: do not push to GHCR; load directly into the local daemon.
+    push: false
+    useBuildkit: true
+    # Concurrently build both images
+    concurrency: 2
+
+  tagPolicy:
+    # Use the git commit SHA as the image tag.
+    gitCommit:
+      variant: AbbrevCommitSha
+
+# ── Manifests (default = local overlay) ──────────────────────────────────────
+manifests:
+  kustomize:
+    paths:
+      - overlays/local
+
+# ── Deploy ────────────────────────────────────────────────────────────────────
+deploy:
+  kubectl:
+    defaultNamespace: kadto-local
+  statusCheck: true
+  statusCheckDeadlineSeconds: 180
+  tolerateFailuresUntilDeadline: true
+
+# ── Port Forwarding (local dev only) ─────────────────────────────────────────
+portForward:
+  - resourceType: Service
+    resourceName: kadto-api
+    namespace: kadto-local
+    port: 80
+    localPort: 8080
+  - resourceType: Service
+    resourceName: postgres
+    namespace: kadto-local
+    port: 5432
+    localPort: 5432
+  - resourceType: Service
+    resourceName: redis
+    namespace: kadto-local
+    port: 6379
+    localPort: 6379
+
+# ── Profiles ──────────────────────────────────────────────────────────────────
+profiles:
+  # ── stage ────────────────────────────────────────────────────────────────────
+  - name: stage
+    build:
+      artifacts:
+        - image: ghcr.io/richmondwang/kadto-api
+          docker:
+            dockerfile: ../Dockerfile.api
+        - image: ghcr.io/richmondwang/kadto-worker
+          docker:
+            dockerfile: ../Dockerfile.worker
+      local:
+        push: true
+        useBuildkit: true
+      tagPolicy:
+        gitCommit:
+          variant: AbbrevCommitSha
+
+    manifests:
+      kustomize:
+        paths:
+          - overlays/stage
+
+    deploy:
+      kubectl:
+        defaultNamespace: kadto-stage
+      statusCheck: true
+      statusCheckDeadlineSeconds: 300
+
+    # No portForward in stage — access via Ingress
+    portForward: []
+
+  # ── prod ─────────────────────────────────────────────────────────────────────
+  - name: prod
+    build:
+      artifacts:
+        - image: ghcr.io/richmondwang/kadto-api
+          docker:
+            dockerfile: ../Dockerfile.api
+        - image: ghcr.io/richmondwang/kadto-worker
+          docker:
+            dockerfile: ../Dockerfile.worker
+      local:
+        push: true
+        useBuildkit: true
+      tagPolicy:
+        gitCommit:
+          variant: AbbrevCommitSha
+
+    manifests:
+      kustomize:
+        paths:
+          - overlays/prod
+
+    deploy:
+      kubectl:
+        defaultNamespace: kadto-prod
+      statusCheck: true
+      statusCheckDeadlineSeconds: 300
+
+    portForward: []

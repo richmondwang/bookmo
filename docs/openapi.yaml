@@ -13,7 +13,7 @@ info:
 servers:
   - url: http://localhost:8080/v1
     description: Local development
-  - url: https://api.bookmo.ph/v1
+  - url: https://api.kadto.com/v1
     description: Production
 
 tags:

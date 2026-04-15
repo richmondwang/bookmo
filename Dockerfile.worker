@@ -1,0 +1,28 @@
+# syntax=docker/dockerfile:1
+
+# ── Dev stage (hot reload) ────────────────────────────────────────────────────
+# Used by Skaffold for local development.
+# Air watches for .go file changes synced in by Skaffold and recompiles.
+FROM golang:1.23-alpine AS dev
+WORKDIR /app
+RUN apk add --no-cache git
+RUN go install github.com/air-verse/air@v1.61.7
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+CMD ["air", "-c", ".air.worker.toml"]
+
+# ── Build stage (production binary) ──────────────────────────────────────────
+FROM golang:1.23-alpine AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -ldflags="-s -w" -trimpath \
+    -o /bin/worker ./cmd/worker
+
+# ── Runtime stage (production) ───────────────────────────────────────────────
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=builder /bin/worker /worker
+ENTRYPOINT ["/worker"]

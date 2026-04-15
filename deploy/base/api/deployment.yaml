@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kadto-api
+  labels:
+    app.kubernetes.io/name: kadto-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: kadto
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kadto-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kadto-api
+        app.kubernetes.io/component: api
+        app.kubernetes.io/part-of: kadto
+    spec:
+      serviceAccountName: kadto
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: api
+          # Image tag is managed by Skaffold / kustomize images override.
+          # Replace "your-org" with your GitHub organisation.
+          image: ghcr.io/richmondwang/kadto-api:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: kadto-config
+            - secretRef:
+                name: kadto-secrets
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      # In stage/prod, an imagePullSecret is required to pull from GHCR.
+      # Create it once per namespace:
+      #   kubectl create secret docker-registry ghcr-pull-secret \
+      #     --docker-server=ghcr.io \
+      #     --docker-username=<github-user> \
+      #     --docker-password=<ghcr-pat> \
+      #     -n kadto-stage
+      # Then uncomment:
+      # imagePullSecrets:
+      #   - name: ghcr-pull-secret

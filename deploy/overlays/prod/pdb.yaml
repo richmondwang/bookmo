@@ -1,0 +1,24 @@
+# Ensures at least 1 API pod is always available during voluntary disruptions
+# (node drains, rolling updates). Requires minReplicas >= 2.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kadto-api
+  namespace: kadto-prod
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kadto-api
+---
+# Worker PDB — allow at most 1 disruption at a time
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kadto-worker
+  namespace: kadto-prod
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kadto-worker

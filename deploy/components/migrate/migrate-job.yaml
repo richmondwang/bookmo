@@ -1,0 +1,59 @@
+# Migration Job — runs DB migrations using the API binary.
+#
+# Included in stage/prod overlays via deploy/components/migrate.
+# For local dev, migrations are instead run by an init container on the API pod
+# (see deploy/overlays/local/patches/api-deployment.yaml).
+#
+# In stage/prod CI, apply this Job and wait before rolling the Deployment:
+#
+#   kubectl apply -f <rendered-manifests.yaml>
+#   kubectl wait --for=condition=complete job/kadto-migrate \
+#     -n kadto-<env> --timeout=120s
+#   kubectl rollout status deployment/kadto-api -n kadto-<env>
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kadto-migrate
+  labels:
+    app.kubernetes.io/name: kadto-migrate
+    app.kubernetes.io/component: migration
+    app.kubernetes.io/part-of: kadto
+spec:
+  # Auto-delete 2 minutes after completion so it does not clutter the namespace.
+  # Requires TTLAfterFinished feature gate (on by default since k8s 1.23).
+  ttlSecondsAfterFinished: 120
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kadto-migrate
+        app.kubernetes.io/component: migration
+        app.kubernetes.io/part-of: kadto
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: kadto
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: ghcr.io/richmondwang/kadto-api:latest
+          command: ["/api", "migrate", "up"]
+          envFrom:
+            - secretRef:
+                name: kadto-secrets
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

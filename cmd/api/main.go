@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/richmondwang/bookmo/internal/server"
-	"github.com/richmondwang/bookmo/pkg/config"
+	"github.com/richmondwang/kadto/internal/server"
+	"github.com/richmondwang/kadto/pkg/config"
 	"log"
 )
 

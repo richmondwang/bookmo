@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kadto-config
+data:
+  APP_ENV: "development"
+  PORT: "8080"
+  S3_REGION: "ap-southeast-1"

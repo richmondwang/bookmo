@@ -1,0 +1,30 @@
+# Production ingress. Replace "api.kadto.com" with your actual domain.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kadto-api
+  namespace: kadto-prod
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "10"
+    # Rate limiting at ingress level (supplement app-level limits)
+    nginx.ingress.kubernetes.io/limit-rps: "200"
+spec:
+  tls:
+    - hosts:
+        - api.kadto.com
+      secretName: kadto-prod-tls
+  rules:
+    - host: api.kadto.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kadto-api
+                port:
+                  name: http

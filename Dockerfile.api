@@ -1,0 +1,33 @@
+# syntax=docker/dockerfile:1
+
+# ── Dev stage (hot reload) ────────────────────────────────────────────────────
+# Used by Skaffold for local development.
+# Air watches for .go file changes synced in by Skaffold and recompiles.
+# Also builds /api so the migrate init container can use this image locally.
+FROM golang:1.23-alpine AS dev
+WORKDIR /app
+RUN apk add --no-cache git
+RUN go install github.com/air-verse/air@v1.61.7
+RUN go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.18.1
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /api ./cmd/api
+CMD ["air", "-c", ".air.api.toml"]
+
+# ── Build stage (production binary) ──────────────────────────────────────────
+FROM golang:1.23-alpine AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -ldflags="-s -w" -trimpath \
+    -o /bin/api ./cmd/api
+
+# ── Runtime stage (production) ───────────────────────────────────────────────
+# distroless/static has no shell, no package manager — minimal attack surface.
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=builder /bin/api /api
+EXPOSE 8080
+ENTRYPOINT ["/api"]

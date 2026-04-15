@@ -1,0 +1,33 @@
+# GKE Ingress using the nginx-ingress controller.
+# Replace "stage.api.kadto.com" with your actual stage domain.
+# TLS certificate is managed by cert-manager (ClusterIssuer: letsencrypt-prod).
+#
+# Install cert-manager if not already present:
+#   kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kadto-api
+  namespace: kadto-stage
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "10"
+spec:
+  tls:
+    - hosts:
+        - stage.api.kadto.com
+      secretName: kadto-stage-tls
+  rules:
+    - host: stage.api.kadto.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kadto-api
+                port:
+                  name: http

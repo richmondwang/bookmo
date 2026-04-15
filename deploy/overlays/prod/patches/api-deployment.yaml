@@ -1,0 +1,40 @@
+# Prod patch: Cloud SQL Auth Proxy sidecar, Workload Identity, prod resource limits.
+# Replace all <...> placeholders before deploying.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kadto-api
+spec:
+  replicas: 3
+  template:
+    metadata:
+      annotations:
+        iam.gke.io/gcp-service-account: "<gcp-sa-email>"
+    spec:
+      containers:
+        - name: api
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+        - name: cloud-sql-proxy
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2
+          args:
+            - "--structured-logs"
+            - "--port=5432"
+            - "<gcp-project-id>:<region>:<instance-name>"
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi

@@ -1,0 +1,7 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# Migration Job component — included by stage and prod overlays only.
+# Local dev runs migrations via an init container on the API pod instead.
+resources:
+  - migrate-job.yaml

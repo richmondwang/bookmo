@@ -1,0 +1,50 @@
+# Stage patch: adds Cloud SQL Auth Proxy sidecar, sets Workload Identity annotation,
+# and increases resource limits vs base.
+#
+# Replace the following placeholders:
+#   <gcp-project-id>   — your GCP project ID
+#   <region>           — Cloud SQL region, e.g. asia-southeast1
+#   <instance-name>    — Cloud SQL instance name, e.g. kadto-stage
+#   <gcp-sa-email>     — GCP service account email for Workload Identity
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kadto-api
+spec:
+  replicas: 2
+  template:
+    metadata:
+      annotations:
+        # Enables Cloud SQL Auth Proxy to use Workload Identity
+        iam.gke.io/gcp-service-account: "<gcp-sa-email>"
+    spec:
+      serviceAccountName: kadto
+      containers:
+        - name: api
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+        # Cloud SQL Auth Proxy sidecar — provides a secure local TCP proxy
+        # to Cloud SQL. The app connects to 127.0.0.1:5432.
+        - name: cloud-sql-proxy
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2
+          args:
+            - "--structured-logs"
+            - "--port=5432"
+            - "<gcp-project-id>:<region>:<instance-name>"
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi

@@ -1,0 +1,36 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: kadto-stage
+
+resources:
+  - ../../base
+  - secretstore.yaml
+  - external-secret.yaml
+  - ingress.yaml
+  - hpa.yaml
+
+# Migration Job — included here but not in local (which uses an init container instead)
+components:
+  - ../../components/migrate
+
+patches:
+  # Override base ConfigMap with stage env values
+  - path: configmap.yaml
+    target:
+      kind: ConfigMap
+      name: kadto-config
+  - path: patches/api-deployment.yaml
+    target:
+      kind: Deployment
+      name: kadto-api
+  - path: patches/worker-deployment.yaml
+    target:
+      kind: Deployment
+      name: kadto-worker
+
+images:
+  - name: ghcr.io/richmondwang/kadto-api
+    newTag: "$(IMAGE_TAG)"
+  - name: ghcr.io/richmondwang/kadto-worker
+    newTag: "$(IMAGE_TAG)"

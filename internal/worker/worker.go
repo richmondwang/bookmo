@@ -6,9 +6,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/richmondwang/bookmo/pkg/config"
-	"github.com/richmondwang/bookmo/pkg/db"
-	redispkg "github.com/richmondwang/bookmo/pkg/redis"
+	"github.com/richmondwang/kadto/pkg/config"
+	"github.com/richmondwang/kadto/pkg/db"
+	redispkg "github.com/richmondwang/kadto/pkg/redis"
 )
 
 func Run(cfg *config.Config) error {

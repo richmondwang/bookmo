@@ -1,0 +1,161 @@
+# Skaffold configuration for Kadto — Booking Platform
+#
+# Prerequisites (local):
+#   - Docker Desktop (Kubernetes enabled), kind, or minikube
+#   - kubectl, skaffold >= v2.10 (skaffold/v4beta13 schema)
+#
+# Quick start (local dev with hot reload):
+#   skaffold dev
+#
+# Deploy to stage (CI or manual):
+#   IMAGE_TAG=abc123 skaffold run -p stage --kube-context=<stage-context>
+#
+# Deploy to prod:
+#   IMAGE_TAG=v1.2.3 skaffold run -p prod --kube-context=<prod-context>
+#
+# Render manifests without deploying:
+#   skaffold render -p stage > /tmp/stage-manifests.yaml
+
+apiVersion: skaffold/v4beta13
+kind: Config
+
+metadata:
+  name: kadto
+
+# ── Build ─────────────────────────────────────────────────────────────────────
+build:
+  artifacts:
+    - image: ghcr.io/richmondwang/kadto-api
+      docker:
+        dockerfile: Dockerfile.api
+        target: dev     # hot-reload stage; stage/prod profiles use final prod stage
+      sync:
+        # Skaffold copies changed files into the running container.
+        # Air detects the change and recompiles — no pod restart needed.
+        manual:
+          - src: "**/*.go"
+            dest: /app
+          - src: "go.mod"
+            dest: /app
+          - src: "go.sum"
+            dest: /app
+          - src: "migrations/**"
+            dest: /app
+
+    - image: ghcr.io/richmondwang/kadto-worker
+      docker:
+        dockerfile: Dockerfile.worker
+        target: dev
+      sync:
+        manual:
+          - src: "**/*.go"
+            dest: /app
+          - src: "go.mod"
+            dest: /app
+          - src: "go.sum"
+            dest: /app
+
+  local:
+    # Local builds: load directly into the local daemon, do not push to GHCR.
+    push: false
+    useBuildkit: true
+    concurrency: 2
+
+  tagPolicy:
+    gitCommit:
+      variant: AbbrevCommitSha
+
+# ── Manifests (default = local overlay) ──────────────────────────────────────
+manifests:
+  kustomize:
+    paths:
+      - deploy/overlays/local
+
+# ── Deploy ────────────────────────────────────────────────────────────────────
+deploy:
+  kubectl:
+    defaultNamespace: kadto-local
+  statusCheck: true
+  statusCheckDeadlineSeconds: 180
+  tolerateFailuresUntilDeadline: true
+
+# ── Port Forwarding (local dev only) ─────────────────────────────────────────
+portForward:
+  - resourceType: Service
+    resourceName: kadto-api
+    namespace: kadto-local
+    port: 80
+    localPort: 8080
+  - resourceType: Service
+    resourceName: postgres
+    namespace: kadto-local
+    port: 5432
+    localPort: 5432
+  - resourceType: Service
+    resourceName: redis
+    namespace: kadto-local
+    port: 6379
+    localPort: 6379
+
+# ── Profiles ──────────────────────────────────────────────────────────────────
+profiles:
+  # ── stage ────────────────────────────────────────────────────────────────────
+  - name: stage
+    build:
+      artifacts:
+        - image: ghcr.io/richmondwang/kadto-api
+          docker:
+            dockerfile: Dockerfile.api
+            # No target = final distroless prod stage
+        - image: ghcr.io/richmondwang/kadto-worker
+          docker:
+            dockerfile: Dockerfile.worker
+      local:
+        push: true
+        useBuildkit: true
+      tagPolicy:
+        gitCommit:
+          variant: AbbrevCommitSha
+
+    manifests:
+      kustomize:
+        paths:
+          - deploy/overlays/stage
+
+    deploy:
+      kubectl:
+        defaultNamespace: kadto-stage
+      statusCheck: true
+      statusCheckDeadlineSeconds: 300
+
+    portForward: []
+
+  # ── prod ─────────────────────────────────────────────────────────────────────
+  - name: prod
+    build:
+      artifacts:
+        - image: ghcr.io/richmondwang/kadto-api
+          docker:
+            dockerfile: Dockerfile.api
+        - image: ghcr.io/richmondwang/kadto-worker
+          docker:
+            dockerfile: Dockerfile.worker
+      local:
+        push: true
+        useBuildkit: true
+      tagPolicy:
+        gitCommit:
+          variant: AbbrevCommitSha
+
+    manifests:
+      kustomize:
+        paths:
+          - deploy/overlays/prod
+
+    deploy:
+      kubectl:
+        defaultNamespace: kadto-prod
+      statusCheck: true
+      statusCheckDeadlineSeconds: 300
+
+    portForward: []

@@ -58,7 +58,7 @@ swagger-serve:
 // and approve bookings.
 //
 //	Schemes: https, http
-//	Host: api.kadto.ph
+//	Host: api.kadto.com
 //	BasePath: /v1
 //	Version: 1.0.0
 //	License: Proprietary

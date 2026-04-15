@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Namespace is NOT set here — each overlay declares its own.
+
+# labels replaces the deprecated commonLabels.
+# includeSelectors: false — do not inject into matchLabels (immutable on live Deployments).
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: kadto
+    includeSelectors: false
+    includeTemplates: true
+
+resources:
+  - serviceaccount.yaml
+  - configmap.yaml
+  - api/deployment.yaml
+  - api/service.yaml
+  - worker/deployment.yaml

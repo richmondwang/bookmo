@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kadto-config
+data:
+  # Overridden per overlay
+  APP_ENV: "production"
+  PORT: "8080"
+  # S3 / storage — non-sensitive values
+  S3_REGION: "ap-southeast-1"
+  # Sensitive values (DATABASE_URL, REDIS_URL, JWT_SECRET, etc.) come
+  # from the kadto-secrets Secret, created by ExternalSecret in stage/prod
+  # and by a plain Secret in local.

@@ -1,0 +1,69 @@
+# Simple single-node Postgres for local Skaffold dev.
+# Data is ephemeral (emptyDir) — not for production.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/component: database
+    spec:
+      containers:
+        - name: postgres
+          image: postgis/postgis:15-3.4
+          ports:
+            - name: pg
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: kadto
+            - name: POSTGRES_PASSWORD
+              value: kadto
+            - name: POSTGRES_DB
+              value: booking_platform
+          args:
+            - "postgres"
+            - "-c"
+            - "shared_preload_libraries=pg_trgm"
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "kadto", "-d", "booking_platform"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app.kubernetes.io/name: postgres
+spec:
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: pg
+      port: 5432
+      targetPort: pg

@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kadto-worker
+spec:
+  template:
+    spec:
+      containers:
+        - name: worker
+          imagePullPolicy: Never   # image is built locally by Skaffold; never pull from registry
+          securityContext:
+            # Air compiles to /tmp/air — readOnlyRootFilesystem must be false in dev.
+            readOnlyRootFilesystem: false
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1536Mi
+          volumeMounts:
+            - name: cache
+              mountPath: /.cache
+      volumes:
+        - name: cache
+          emptyDir: {}   # Go build cache used by Air for hot reload

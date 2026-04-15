@@ -13,8 +13,8 @@ package main
 
 import (
 	"log"
-	"github.com/richmondwang/bookmo/internal/config"
-	"github.com/richmondwang/bookmo/internal/server"
+	"github.com/richmondwang/kadto/internal/config"
+	"github.com/richmondwang/kadto/internal/server"
 )
 
 func main() {
@@ -33,8 +33,8 @@ package main
 
 import (
 	"log"
-	"github.com/richmondwang/bookmo/internal/config"
-	"github.com/richmondwang/bookmo/internal/worker"
+	"github.com/richmondwang/kadto/internal/config"
+	"github.com/richmondwang/kadto/internal/worker"
 )
 
 func main() {
@@ -295,9 +295,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/richmondwang/bookmo/pkg/config"
-	"github.com/richmondwang/bookmo/pkg/db"
-	redispkg "github.com/richmondwang/bookmo/pkg/redis"
+	"github.com/richmondwang/kadto/pkg/config"
+	"github.com/richmondwang/kadto/pkg/db"
+	redispkg "github.com/richmondwang/kadto/pkg/redis"
 )
 
 func Run(cfg *config.Config) error {
@@ -344,9 +344,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/richmondwang/bookmo/pkg/config"
-	"github.com/richmondwang/bookmo/pkg/db"
-	redispkg "github.com/richmondwang/bookmo/pkg/redis"
+	"github.com/richmondwang/kadto/pkg/config"
+	"github.com/richmondwang/kadto/pkg/db"
+	redispkg "github.com/richmondwang/kadto/pkg/redis"
 )
 
 func Run(cfg *config.Config) error {
@@ -842,7 +842,7 @@ FCM_SERVER_KEY=...
 # APNs (iOS push)
 APNS_KEY_ID=...
 APNS_TEAM_ID=...
-APNS_BUNDLE_ID=com.yourorg.bookingplatform
+APNS_BUNDLE_ID=com.skylerlabs.kadtobookingplatform
 
 # S3-compatible storage
 S3_BUCKET=booking-platform-media
@@ -1263,7 +1263,7 @@ echo ""
 echo "✅ Project structure created successfully."
 echo ""
 echo "Next steps:"
-echo "  1. Replace 'github.com/richmondwang/bookmo' in go.mod and all *.go files with your actual module path"
+echo "  1. Replace 'github.com/richmondwang/kadto' in go.mod and all *.go files with your actual module path"
 echo "  2. cp .env.example .env  and fill in your credentials"
 echo "  3. go mod tidy"
 echo "  4. Start Claude Code:  claude"

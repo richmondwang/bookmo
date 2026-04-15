@@ -1,0 +1,64 @@
+# Local: smaller resource limits, relaxed security for dev ergonomics,
+# no Cloud SQL proxy sidecar.
+#
+# The migrate init container runs DB migrations before the API starts on
+# every pod creation. golang-migrate is idempotent — already-applied
+# migrations are skipped.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kadto-api
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: wait-postgres
+          image: postgres:15-alpine
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - until pg_isready -h postgres -p 5432 -U kadto; do echo "waiting for postgres..."; sleep 2; done
+        - name: migrate
+          # Same image as the main container — golang-migrate CLI is installed
+          # in the dev stage. Skaffold replaces the tag.
+          image: ghcr.io/richmondwang/kadto-api:latest
+          imagePullPolicy: Never   # image is built locally by Skaffold; never pull from registry
+          command:
+            - sh
+            - -c
+            - |
+              if ! migrate -path /app/migrations -database "$DATABASE_URL" up 2>/tmp/m.err; then
+                if grep -q "Dirty database version" /tmp/m.err; then
+                  V=$(grep -oP "Dirty database version \K[0-9]+" /tmp/m.err)
+                  echo "Dirty migration at version $V — forcing clean and retrying..."
+                  migrate -path /app/migrations -database "$DATABASE_URL" force "$V"
+                  migrate -path /app/migrations -database "$DATABASE_URL" up
+                else
+                  cat /tmp/m.err
+                  exit 1
+                fi
+              fi
+          envFrom:
+            - secretRef:
+                name: kadto-secrets
+      containers:
+        - name: api
+          imagePullPolicy: Never   # image is built locally by Skaffold; never pull from registry
+          securityContext:
+            # Air compiles to /tmp/air — readOnlyRootFilesystem must be false
+            # in dev. Production overlay keeps this true.
+            readOnlyRootFilesystem: false
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1536Mi
+          volumeMounts:
+            - name: cache
+              mountPath: /.cache
+      volumes:
+        - name: cache
+          emptyDir: {}   # Go build cache used by Air for hot reload

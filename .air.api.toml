@@ -1,0 +1,26 @@
+root = "."
+tmp_dir = "/tmp/air"
+
+[build]
+  bin = "/tmp/air/api"
+  cmd = "GOCACHE=/.cache/go-build go build -p=2 -buildvcs=false -o /tmp/air/api ./cmd/api"
+  delay = 1000
+  exclude_dir = ["tmp", "vendor", "testdata", "deploy", "docs", ".git"]
+  include_ext = ["go", "toml"]
+  exclude_regex = ["_test\\.go"]
+  kill_delay = "0s"
+  send_interrupt = true
+  stop_on_error = true
+
+[log]
+  time = true
+  main_only = false
+
+[color]
+  build = "yellow"
+  main = "magenta"
+  runner = "green"
+  watcher = "cyan"
+
+[misc]
+  clean_on_exit = false

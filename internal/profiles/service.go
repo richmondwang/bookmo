@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/richmondwang/bookmo/pkg/config"
+	"github.com/richmondwang/kadto/pkg/config"
 )
 
 // Service implements the business logic for the profiles module.
